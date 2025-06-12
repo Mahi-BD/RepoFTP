@@ -2,6 +2,9 @@
 
 A Windows Forms application built with VB.NET that provides FTP synchronization and folder cleaning capabilities.
 
+![image](https://github.com/user-attachments/assets/b8506bd1-394c-4e1e-aeb3-a9a5bae56808)
+
+
 ## Features
 
 ### 🔄 FTP Synchronization
