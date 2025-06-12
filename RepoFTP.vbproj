@@ -5,14 +5,16 @@
     <TargetFramework>net8.0-windows</TargetFramework>
     <StartupObject>RepoFTP.Program</StartupObject>
     <UseWindowsForms>true</UseWindowsForms>
-    <MyType>Empty</MyType>
+    <UseWPF>false</UseWPF>
+    <MyType>WindowsForms</MyType>
+    <EnableDefaultItems>false</EnableDefaultItems>
   </PropertyGroup>
 
   <ItemGroup>
-    <Compile Remove="RepoBundle\**" />
-    <EmbeddedResource Remove="RepoBundle\**" />
-    <None Remove="RepoBundle\**" />
+    <Compile Include="*.vb" />
+    <EmbeddedResource Include="*.resx" />
   </ItemGroup>
+
 
   <ItemGroup>
     <Import Include="System.Data" />

@@ -41,6 +41,7 @@ Partial Class frmMain
         lblProgress = New Label()
         btnSync = New Button()
         btnViewLogs = New Button()
+        btnCleanFolders = New Button()
         grpSyncSettings = New GroupBox()
         splitContainer2 = New SplitContainer()
         pnlSyncTop = New Panel()
@@ -58,7 +59,7 @@ Partial Class frmMain
         lblStatus = New Label()
         menuStrip1 = New MenuStrip()
         fileToolStripMenuItem = New ToolStripMenuItem()
-        toolStripSeparator3 = New ToolStripSeparator()
+        settingsToolStripMenuItem = New ToolStripMenuItem()
         toolStripSeparator1 = New ToolStripSeparator()
         exitToolStripMenuItem = New ToolStripMenuItem()
         helpToolStripMenuItem = New ToolStripMenuItem()
@@ -246,6 +247,7 @@ Partial Class frmMain
         pnlSyncControls.Controls.Add(lblProgress)
         pnlSyncControls.Controls.Add(btnSync)
         pnlSyncControls.Controls.Add(btnViewLogs)
+        pnlSyncControls.Controls.Add(btnCleanFolders)
         pnlSyncControls.Dock = DockStyle.Fill
         pnlSyncControls.Font = New Font("Segoe UI", 9F)
         pnlSyncControls.Location = New Point(8, 26)
@@ -256,9 +258,9 @@ Partial Class frmMain
         ' progressBar
         ' 
         progressBar.Anchor = AnchorStyles.Bottom Or AnchorStyles.Left Or AnchorStyles.Right
-        progressBar.Location = New Point(247, 31)
+        progressBar.Location = New Point(367, 30)
         progressBar.Name = "progressBar"
-        progressBar.Size = New Size(414, 20)
+        progressBar.Size = New Size(292, 20)
         progressBar.Style = ProgressBarStyle.Continuous
         progressBar.TabIndex = 5
         progressBar.Visible = False
@@ -269,7 +271,7 @@ Partial Class frmMain
         lblProgress.AutoSize = True
         lblProgress.Font = New Font("Segoe UI", 10F, FontStyle.Bold)
         lblProgress.ForeColor = Color.FromArgb(CByte(40), CByte(167), CByte(69))
-        lblProgress.Location = New Point(247, 8)
+        lblProgress.Location = New Point(363, 9)
         lblProgress.Name = "lblProgress"
         lblProgress.Size = New Size(51, 19)
         lblProgress.TabIndex = 4
@@ -300,6 +302,19 @@ Partial Class frmMain
         btnViewLogs.TabIndex = 6
         btnViewLogs.Text = "📄 Logs"
         btnViewLogs.UseVisualStyleBackColor = False
+        ' 
+        ' btnCleanFolders
+        ' 
+        btnCleanFolders.BackColor = Color.FromArgb(CByte(255), CByte(193), CByte(7))
+        btnCleanFolders.FlatStyle = FlatStyle.Flat
+        btnCleanFolders.Font = New Font("Segoe UI", 10F, FontStyle.Bold)
+        btnCleanFolders.ForeColor = Color.Black
+        btnCleanFolders.Location = New Point(245, 12)
+        btnCleanFolders.Name = "btnCleanFolders"
+        btnCleanFolders.Size = New Size(110, 39)
+        btnCleanFolders.TabIndex = 7
+        btnCleanFolders.Text = ChrW(55358) & ChrW(56825) & " Clean"
+        btnCleanFolders.UseVisualStyleBackColor = False
         ' 
         ' grpSyncSettings
         ' 
@@ -488,15 +503,16 @@ Partial Class frmMain
         ' 
         ' fileToolStripMenuItem
         ' 
-        fileToolStripMenuItem.DropDownItems.AddRange(New ToolStripItem() {toolStripSeparator3, toolStripSeparator1, exitToolStripMenuItem})
+        fileToolStripMenuItem.DropDownItems.AddRange(New ToolStripItem() {settingsToolStripMenuItem, toolStripSeparator1, exitToolStripMenuItem})
         fileToolStripMenuItem.Name = "fileToolStripMenuItem"
         fileToolStripMenuItem.Size = New Size(37, 20)
         fileToolStripMenuItem.Text = "&File"
         ' 
-        ' toolStripSeparator3
+        ' settingsToolStripMenuItem
         ' 
-        toolStripSeparator3.Name = "toolStripSeparator3"
-        toolStripSeparator3.Size = New Size(132, 6)
+        settingsToolStripMenuItem.Name = "settingsToolStripMenuItem"
+        settingsToolStripMenuItem.Size = New Size(135, 22)
+        settingsToolStripMenuItem.Text = "&Settings..."
         ' 
         ' toolStripSeparator1
         ' 
@@ -628,13 +644,14 @@ Partial Class frmMain
     Friend WithEvents pnlSyncControls As Panel
     Friend WithEvents btnSync As Button
     Friend WithEvents btnViewLogs As Button
+    Friend WithEvents btnCleanFolders As Button
     Friend WithEvents lblProgress As Label
     Friend WithEvents progressBar As ProgressBar
 
     ' Menu and Status - keeping original names
     Friend WithEvents menuStrip1 As MenuStrip
     Friend WithEvents fileToolStripMenuItem As ToolStripMenuItem
-    Friend WithEvents toolStripSeparator3 As ToolStripSeparator
+    Friend WithEvents settingsToolStripMenuItem As ToolStripMenuItem
     Friend WithEvents toolStripSeparator1 As ToolStripSeparator
     Friend WithEvents exitToolStripMenuItem As ToolStripMenuItem
     Friend WithEvents helpToolStripMenuItem As ToolStripMenuItem

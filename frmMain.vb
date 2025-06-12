@@ -1216,4 +1216,228 @@ Public Class frmMain
                                    End Sub
         saveTimer.Start()
     End Sub
+
+    Private Sub settingsToolStripMenuItem_Click(sender As Object, e As EventArgs) Handles settingsToolStripMenuItem.Click
+        Try
+            logger.Info("User opened settings dialog")
+            Using settingsForm As New frmSettings()
+                If settingsForm.ShowDialog() = DialogResult.OK Then
+                    logger.Info("Settings saved successfully")
+                End If
+            End Using
+        Catch ex As Exception
+            logger.Error("Error opening settings dialog", ex)
+            MessageBox.Show($"Error opening settings: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error)
+        End Try
+    End Sub
+
+    Private Sub btnCleanFolders_Click(sender As Object, e As EventArgs) Handles btnCleanFolders.Click
+        Try
+            logger.Info("User initiated clean folders operation")
+            
+            If String.IsNullOrWhiteSpace(txtLocalFolder?.Text) Then
+                MessageBox.Show("Please select a local folder first.", "No Folder Selected", MessageBoxButtons.OK, MessageBoxIcon.Warning)
+                Return
+            End If
+
+            Dim localFolderPath As String = txtLocalFolder.Text.Trim()
+            If Not Directory.Exists(localFolderPath) Then
+                MessageBox.Show("Selected local folder does not exist.", "Folder Not Found", MessageBoxButtons.OK, MessageBoxIcon.Warning)
+                Return
+            End If
+
+            ' Get clean folder settings from config.ini
+            Dim cleanFoldersString As String = "bin,obj,packages,.vs,Debug,Release"
+            Dim forceDeleteString As String = "True"
+            
+            Dim configFilePath As String = Path.Combine(Application.StartupPath, "config.ini")
+            If File.Exists(configFilePath) Then
+                Dim lines As String() = File.ReadAllLines(configFilePath)
+                For Each line As String In lines
+                    If line.StartsWith("CleanFolders=") Then
+                        cleanFoldersString = line.Substring("CleanFolders=".Length)
+                    ElseIf line.StartsWith("ForceDelete=") Then
+                        forceDeleteString = line.Substring("ForceDelete=".Length)
+                    End If
+                Next
+            End If
+            
+            Dim forceDelete As Boolean = Boolean.Parse(forceDeleteString)
+            
+            ' Parse and clean the folder names
+            Dim tempFolders As String() = cleanFoldersString.Split(","c)
+            Dim cleanFoldersList As New List(Of String)()
+            For Each folder As String In tempFolders
+                Dim trimmedFolder As String = folder.Trim()
+                If Not String.IsNullOrEmpty(trimmedFolder) Then
+                    cleanFoldersList.Add(trimmedFolder)
+                End If
+            Next
+            Dim foldersToProcess As String() = New String(cleanFoldersList.Count - 1) {}
+            cleanFoldersList.CopyTo(foldersToProcess)
+
+            If foldersToProcess.Length = 0 Then
+                MessageBox.Show("No clean folders configured. Please configure clean folders in Settings.", "No Clean Folders", MessageBoxButtons.OK, MessageBoxIcon.Information)
+                Return
+            End If
+
+            ' Show confirmation dialog
+            Dim foldersToClean As New List(Of String)()
+            For Each folderName In foldersToProcess
+                Dim folderPath As String = Path.Combine(localFolderPath, folderName)
+                If Directory.Exists(folderPath) Then
+                    foldersToClean.Add(folderName)
+                End If
+            Next
+
+            If foldersToClean.Count = 0 Then
+                MessageBox.Show("No folders found to clean in the selected directory.", "No Folders to Clean", MessageBoxButtons.OK, MessageBoxIcon.Information)
+                Return
+            End If
+
+            Dim message As String = $"This will delete all files and subfolders inside the following folders in:{vbCrLf}{localFolderPath}{vbCrLf}{vbCrLf}"
+            message &= String.Join(", ", foldersToClean) & vbCrLf & vbCrLf
+            message &= "The folders themselves will remain. Continue?"
+
+            If MessageBox.Show(message, "Confirm Clean Operation", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) = DialogResult.Yes Then
+                Dim folderArray(foldersToClean.Count - 1) As String
+                foldersToClean.CopyTo(folderArray)
+                CleanFolders(localFolderPath, folderArray, forceDelete)
+            End If
+
+        Catch ex As Exception
+            logger.Error("Error in clean folders operation", ex)
+            MessageBox.Show($"Error in clean operation: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error)
+        End Try
+    End Sub
+
+    Private Sub CleanFolders(basePath As String, folderNames As String(), forceDelete As Boolean)
+        Try
+            logger.Info($"Starting clean operation in: {basePath}")
+            logger.Info($"Folders to clean: {String.Join(", ", folderNames)}")
+            logger.Info($"Force delete enabled: {forceDelete}")
+
+            Dim totalCleaned As Integer = 0
+            Dim totalErrors As Integer = 0
+
+            For Each folderName In folderNames
+                Dim folderPath As String = Path.Combine(basePath, folderName)
+                
+                If Directory.Exists(folderPath) Then
+                    logger.Debug($"Cleaning folder: {folderPath}")
+                    Dim result = CleanDirectoryContents(folderPath, forceDelete)
+                    totalCleaned += result.FilesDeleted
+                    totalErrors += result.Errors
+                    logger.Debug($"Cleaned {result.FilesDeleted} files from {folderName}, {result.Errors} errors")
+                Else
+                    logger.Debug($"Folder not found, skipping: {folderPath}")
+                End If
+            Next
+
+            logger.Info($"Clean operation completed - Files deleted: {totalCleaned}, Errors: {totalErrors}")
+            
+            Dim resultMessage As String = $"Clean operation completed!{vbCrLf}Files deleted: {totalCleaned}"
+            If totalErrors > 0 Then
+                resultMessage &= $"{vbCrLf}Errors: {totalErrors} (check logs for details)"
+            End If
+
+            MessageBox.Show(resultMessage, "Clean Complete", MessageBoxButtons.OK, MessageBoxIcon.Information)
+
+        Catch ex As Exception
+            logger.Error("Error during clean operation", ex)
+            MessageBox.Show($"Error during clean operation: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error)
+        End Try
+    End Sub
+
+    Private Function CleanDirectoryContents(directoryPath As String, forceDelete As Boolean) As (FilesDeleted As Integer, Errors As Integer)
+        Dim filesDeleted As Integer = 0
+        Dim errors As Integer = 0
+
+        Try
+            ' Delete all files in the directory
+            Dim files As String() = Directory.GetFiles(directoryPath, "*", SearchOption.AllDirectories)
+            
+            For Each filePath In files
+                Try
+                    If forceDelete Then
+                        ' Remove read-only attribute if present
+                        Dim fileInfo As New FileInfo(filePath)
+                        If fileInfo.IsReadOnly Then
+                            fileInfo.IsReadOnly = False
+                        End If
+                    End If
+                    
+                    File.Delete(filePath)
+                    filesDeleted += 1
+                    logger.Debug($"Deleted file: {filePath}")
+                    
+                Catch ex As Exception
+                    errors += 1
+                    logger.Warning($"Failed to delete file: {filePath} - {ex.Message}")
+                End Try
+            Next
+
+            ' Delete all subdirectories (after files are deleted)
+            Dim subdirectories As String() = Directory.GetDirectories(directoryPath, "*", SearchOption.TopDirectoryOnly)
+            
+            For Each subDir In subdirectories
+                Try
+                    If forceDelete Then
+                        ' Remove read-only attributes from directory and all subdirectories
+                        RemoveReadOnlyAttributes(subDir)
+                    End If
+                    
+                    Directory.Delete(subDir, True) ' Recursive delete
+                    logger.Debug($"Deleted directory: {subDir}")
+                    
+                Catch ex As Exception
+                    errors += 1
+                    logger.Warning($"Failed to delete directory: {subDir} - {ex.Message}")
+                End Try
+            Next
+
+        Catch ex As Exception
+            errors += 1
+            logger.Error($"Error cleaning directory {directoryPath}", ex)
+        End Try
+
+        Return (filesDeleted, errors)
+    End Function
+
+    Private Sub RemoveReadOnlyAttributes(directoryPath As String)
+        Try
+            ' Remove read-only attribute from the directory itself
+            Dim dirInfo As New DirectoryInfo(directoryPath)
+            If (dirInfo.Attributes And FileAttributes.ReadOnly) = FileAttributes.ReadOnly Then
+                dirInfo.Attributes = dirInfo.Attributes And Not FileAttributes.ReadOnly
+            End If
+
+            ' Remove read-only attributes from all files
+            For Each file In Directory.GetFiles(directoryPath, "*", SearchOption.AllDirectories)
+                Try
+                    Dim fileInfo As New FileInfo(file)
+                    If fileInfo.IsReadOnly Then
+                        fileInfo.IsReadOnly = False
+                    End If
+                Catch
+                    ' Continue if we can't modify this file
+                End Try
+            Next
+
+            ' Remove read-only attributes from all subdirectories
+            For Each subDir In Directory.GetDirectories(directoryPath, "*", SearchOption.AllDirectories)
+                Try
+                    Dim subDirInfo As New DirectoryInfo(subDir)
+                    If (subDirInfo.Attributes And FileAttributes.ReadOnly) = FileAttributes.ReadOnly Then
+                        subDirInfo.Attributes = subDirInfo.Attributes And Not FileAttributes.ReadOnly
+                    End If
+                Catch
+                    ' Continue if we can't modify this directory
+                End Try
+            Next
+
+        Catch ex As Exception
+            logger.Warning($"Could not remove read-only attributes from {directoryPath}: {ex.Message}")
+        End Try
+    End Sub
 End Class
