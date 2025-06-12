@@ -1,0 +1,2381 @@
+﻿==================== FILE TREE ====================
+RepoFTP/
+  ConfigManager.vb
+  frmMain.Designer.vb
+  frmMain.resx
+  frmMain.vb
+  Logger.vb
+  Program.vb
+  RepoFTP.sln
+  RepoFTP.vbproj
+  RepoFTP.vbproj.user
+====================================================
+
+Project Title: RepoFTP
+Generated: 6/11/2025 7:57:59 AM
+
+==================== FILE: ConfigManager.vb ====================
+Imports System.IO
+Imports System.Security.Cryptography
+Imports System.Text
+Imports System.Runtime.InteropServices
+
+Public Class ConfigManager
+    Private Const CONFIG_FILE As String = "config.ini"
+    Private Const ENCRYPTION_KEY As String = "FTPSync2025Key!@#"
+    Private configPath As String
+    Private configData As Dictionary(Of String, Dictionary(Of String, String))
+
+    ' Windows API declarations for INI file handling
+    <DllImport("kernel32.dll", CharSet:=CharSet.Unicode)>
+    Private Shared Function WritePrivateProfileString(
+        lpApplicationName As String,
+        lpKeyName As String,
+        lpString As String,
+        lpFileName As String) As Boolean
+    End Function
+
+    <DllImport("kernel32.dll", CharSet:=CharSet.Unicode)>
+    Private Shared Function GetPrivateProfileString(
+        lpApplicationName As String,
+        lpKeyName As String,
+        lpDefault As String,
+        lpReturnedString As StringBuilder,
+        nSize As Integer,
+        lpFileName As String) As Integer
+    End Function
+
+    Public Sub New()
+        Try
+            ' Get the application executable directory
+            Dim appDirectory As String = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location)
+            configPath = Path.Combine(appDirectory, CONFIG_FILE)
+            configData = New Dictionary(Of String, Dictionary(Of String, String))()
+            LoadConfiguration()
+        Catch ex As Exception
+            ' If initialization fails, use temp directory
+            configPath = Path.Combine(Path.GetTempPath(), CONFIG_FILE)
+            configData = New Dictionary(Of String, Dictionary(Of String, String))()
+        End Try
+    End Sub
+
+    Public Sub LoadConfiguration()
+        Try
+            configData.Clear()
+
+            If Not File.Exists(configPath) Then
+                ' Create default configuration file if it doesn't exist
+                CreateDefaultConfig()
+                Return
+            End If
+
+            ' Load all sections and keys from INI file
+            LoadSection("FTP")
+            LoadSection("Sync")
+        Catch ex As Exception
+            ' If loading fails, create a new default config
+            CreateDefaultConfig()
+        End Try
+    End Sub
+
+    Private Sub LoadSection(sectionName As String)
+        Try
+            If String.IsNullOrEmpty(sectionName) Then
+                Return
+            End If
+
+            If Not configData.ContainsKey(sectionName) Then
+                configData(sectionName) = New Dictionary(Of String, String)()
+            End If
+
+            ' Get all key names in the section
+            Dim keys As String() = GetSectionKeys(sectionName)
+
+            For Each key As String In keys
+                If Not String.IsNullOrEmpty(key) Then
+                    Dim value As String = GetValue(sectionName, key, "")
+                    configData(sectionName)(key) = value
+                End If
+            Next
+        Catch ex As Exception
+            ' Log error but continue
+            Console.WriteLine($"Error loading section {sectionName}: {ex.Message}")
+        End Try
+    End Sub
+
+    Private Function GetSectionKeys(sectionName As String) As String()
+        Try
+            ' This is a simplified version - in a full implementation,
+            ' you would read all keys from the section
+            Select Case sectionName.ToUpper()
+                Case "FTP"
+                    Return {"Server", "Username", "Password"}
+                Case "SYNC"
+                    Return {"LocalFolder", "RemoteFolder", "Direction"}
+                Case Else
+                    Return {}
+            End Select
+        Catch
+            Return {}
+        End Try
+    End Function
+
+    Private Sub CreateDefaultConfig()
+        Try
+            configData.Clear()
+
+            ' FTP Section
+            configData("FTP") = New Dictionary(Of String, String) From {
+                {"Server", ""},
+                {"Username", ""},
+                {"Password", ""}
+            }
+
+            ' Sync Section
+            configData("Sync") = New Dictionary(Of String, String) From {
+                {"LocalFolder", ""},
+                {"RemoteFolder", ""},
+                {"Direction", "LocalToRemote"}
+            }
+
+            SaveConfiguration()
+        Catch ex As Exception
+            Throw New Exception($"Failed to create default configuration: {ex.Message}", ex)
+        End Try
+    End Sub
+
+    Public Function GetValue(section As String, key As String, defaultValue As String) As String
+        Try
+            If String.IsNullOrEmpty(section) OrElse String.IsNullOrEmpty(key) Then
+                Return defaultValue
+            End If
+
+            Dim buffer As New StringBuilder(256)
+            Dim result As Integer = GetPrivateProfileString(section, key, defaultValue, buffer, buffer.Capacity, configPath)
+
+            If result > 0 Then
+                Return buffer.ToString().Substring(0, result)
+            Else
+                Return defaultValue
+            End If
+        Catch
+            Return defaultValue
+        End Try
+    End Function
+
+    Public Sub SetValue(section As String, key As String, value As String)
+        Try
+            If String.IsNullOrEmpty(section) OrElse String.IsNullOrEmpty(key) Then
+                Return
+            End If
+
+            If value Is Nothing Then
+                value = ""
+            End If
+
+            ' Update in-memory dictionary
+            If Not configData.ContainsKey(section) Then
+                configData(section) = New Dictionary(Of String, String)()
+            End If
+            configData(section)(key) = value
+
+            ' Write to INI file
+            WritePrivateProfileString(section, key, value, configPath)
+        Catch ex As Exception
+            Throw New Exception($"Error setting configuration value [{section}].[{key}]: {ex.Message}", ex)
+        End Try
+    End Sub
+
+    Public Function GetDecryptedValue(section As String, key As String, defaultValue As String) As String
+        Try
+            If String.IsNullOrEmpty(section) OrElse String.IsNullOrEmpty(key) Then
+                Return defaultValue
+            End If
+
+            Dim encryptedValue As String = GetValue(section, key, "")
+            If String.IsNullOrEmpty(encryptedValue) Then
+                Return defaultValue
+            End If
+
+            Return DecryptString(encryptedValue)
+        Catch
+            Return defaultValue
+        End Try
+    End Function
+
+    Public Sub SetEncryptedValue(section As String, key As String, value As String)
+        Try
+            If String.IsNullOrEmpty(section) OrElse String.IsNullOrEmpty(key) Then
+                Return
+            End If
+
+            If value Is Nothing Then
+                value = ""
+            End If
+
+            Dim encryptedValue As String = EncryptString(value)
+            SetValue(section, key, encryptedValue)
+        Catch ex As Exception
+            Throw New Exception($"Error setting encrypted configuration value [{section}].[{key}]: {ex.Message}", ex)
+        End Try
+    End Sub
+
+    Private Function EncryptString(plainText As String) As String
+        If String.IsNullOrEmpty(plainText) Then
+            Return ""
+        End If
+
+        Try
+            Dim key() As Byte = Encoding.UTF8.GetBytes(ENCRYPTION_KEY.PadRight(32).Substring(0, 32))
+            Dim iv() As Byte = Encoding.UTF8.GetBytes("1234567890123456") ' Simple IV for demo
+
+            Using aes As Aes = Aes.Create()
+                aes.Key = key
+                aes.IV = iv
+                aes.Mode = CipherMode.CBC
+                aes.Padding = PaddingMode.PKCS7
+
+                Using encryptor As ICryptoTransform = aes.CreateEncryptor()
+                    Dim plainBytes() As Byte = Encoding.UTF8.GetBytes(plainText)
+                    Dim encryptedBytes() As Byte = encryptor.TransformFinalBlock(plainBytes, 0, plainBytes.Length)
+                    Return Convert.ToBase64String(encryptedBytes)
+                End Using
+            End Using
+        Catch ex As Exception
+            ' If encryption fails, return original text (not recommended for production)
+            Console.WriteLine($"Encryption failed: {ex.Message}")
+            Return plainText
+        End Try
+    End Function
+
+    Private Function DecryptString(encryptedText As String) As String
+        If String.IsNullOrEmpty(encryptedText) Then
+            Return ""
+        End If
+
+        Try
+            Dim key() As Byte = Encoding.UTF8.GetBytes(ENCRYPTION_KEY.PadRight(32).Substring(0, 32))
+            Dim iv() As Byte = Encoding.UTF8.GetBytes("1234567890123456") ' Same IV used for encryption
+
+            Using aes As Aes = Aes.Create()
+                aes.Key = key
+                aes.IV = iv
+                aes.Mode = CipherMode.CBC
+                aes.Padding = PaddingMode.PKCS7
+
+                Using decryptor As ICryptoTransform = aes.CreateDecryptor()
+                    Dim encryptedBytes() As Byte = Convert.FromBase64String(encryptedText)
+                    Dim decryptedBytes() As Byte = decryptor.TransformFinalBlock(encryptedBytes, 0, encryptedBytes.Length)
+                    Return Encoding.UTF8.GetString(decryptedBytes)
+                End Using
+            End Using
+        Catch ex As Exception
+            ' If decryption fails, return encrypted text
+            Console.WriteLine($"Decryption failed: {ex.Message}")
+            Return encryptedText
+        End Try
+    End Function
+
+    Public Sub SaveConfiguration()
+        Try
+            ' Ensure the configuration file exists
+            If Not File.Exists(configPath) Then
+                Dim dir As String = Path.GetDirectoryName(configPath)
+                If Not Directory.Exists(dir) Then
+                    Directory.CreateDirectory(dir)
+                End If
+                File.Create(configPath).Close()
+            End If
+
+            ' Write all configuration data to INI file
+            For Each section In configData
+                For Each kvp In section.Value
+                    WritePrivateProfileString(section.Key, kvp.Key, kvp.Value, configPath)
+                Next
+            Next
+        Catch ex As Exception
+            Throw New Exception($"Error saving configuration to {configPath}: {ex.Message}", ex)
+        End Try
+    End Sub
+
+    Public Function ConfigFileExists() As Boolean
+        Try
+            Return File.Exists(configPath)
+        Catch
+            Return False
+        End Try
+    End Function
+
+    Public Function GetConfigFilePath() As String
+        Return configPath
+    End Function
+
+    Public Sub BackupConfiguration(backupPath As String)
+        Try
+            If String.IsNullOrEmpty(backupPath) Then
+                Throw New ArgumentException("Backup path cannot be empty")
+            End If
+
+            If File.Exists(configPath) Then
+                File.Copy(configPath, backupPath, True)
+            End If
+        Catch ex As Exception
+            Throw New Exception($"Error backing up configuration: {ex.Message}", ex)
+        End Try
+    End Sub
+
+    Public Sub RestoreConfiguration(backupPath As String)
+        Try
+            If String.IsNullOrEmpty(backupPath) Then
+                Throw New ArgumentException("Backup path cannot be empty")
+            End If
+
+            If File.Exists(backupPath) Then
+                File.Copy(backupPath, configPath, True)
+                LoadConfiguration()
+            Else
+                Throw New FileNotFoundException($"Backup file not found: {backupPath}")
+            End If
+        Catch ex As Exception
+            Throw New Exception($"Error restoring configuration: {ex.Message}", ex)
+        End Try
+    End Sub
+End Class
+
+==================== FILE: frmMain.Designer.vb ====================
+<Global.Microsoft.VisualBasic.CompilerServices.DesignerGenerated()>
+Partial Class frmMain
+    Inherits System.Windows.Forms.Form
+
+    'Form overrides dispose to clean up the component list.
+    <System.Diagnostics.DebuggerNonUserCode()>
+    Protected Overrides Sub Dispose(ByVal disposing As Boolean)
+        Try
+            If disposing AndAlso components IsNot Nothing Then
+                components.Dispose()
+            End If
+        Finally
+            MyBase.Dispose(disposing)
+        End Try
+    End Sub
+
+    'Required by the Windows Form Designer
+    Private components As System.ComponentModel.IContainer
+
+    'NOTE: The following procedure is required by the Windows Form Designer
+    'It can be modified using the Windows Form Designer.  
+    'Do not modify it using the code editor.
+    <System.Diagnostics.DebuggerStepThrough()>
+    Private Sub InitializeComponent()
+        Me.components = New System.ComponentModel.Container()
+        Me.grpFtpSettings = New System.Windows.Forms.GroupBox()
+        Me.lblServerHint = New System.Windows.Forms.Label()
+        Me.btnTestConnection = New System.Windows.Forms.Button()
+        Me.txtFtpPassword = New System.Windows.Forms.TextBox()
+        Me.txtFtpUsername = New System.Windows.Forms.TextBox()
+        Me.txtFtpServer = New System.Windows.Forms.TextBox()
+        Me.lblFtpPassword = New System.Windows.Forms.Label()
+        Me.lblFtpUsername = New System.Windows.Forms.Label()
+        Me.lblFtpServer = New System.Windows.Forms.Label()
+        Me.grpSyncSettings = New System.Windows.Forms.GroupBox()
+        Me.lblSyncDirection = New System.Windows.Forms.Label()
+        Me.grpDirection = New System.Windows.Forms.GroupBox()
+        Me.rbRemoteToLocal = New System.Windows.Forms.RadioButton()
+        Me.rbLocalToRemote = New System.Windows.Forms.RadioButton()
+        Me.btnBrowseLocal = New System.Windows.Forms.Button()
+        Me.txtRemoteFolder = New System.Windows.Forms.TextBox()
+        Me.txtLocalFolder = New System.Windows.Forms.TextBox()
+        Me.lblRemoteFolder = New System.Windows.Forms.Label()
+        Me.lblLocalFolder = New System.Windows.Forms.Label()
+        Me.grpSync = New System.Windows.Forms.GroupBox()
+        Me.lblProgress = New System.Windows.Forms.Label()
+        Me.progressBar = New System.Windows.Forms.ProgressBar()
+        Me.btnSync = New System.Windows.Forms.Button()
+        Me.btnViewLogs = New System.Windows.Forms.Button()
+        Me.lblStatus = New System.Windows.Forms.Label()
+        Me.statusStrip = New System.Windows.Forms.StatusStrip()
+        Me.toolStripStatusLabel = New System.Windows.Forms.ToolStripStatusLabel()
+        Me.folderBrowserDialog = New System.Windows.Forms.FolderBrowserDialog()
+        Me.toolTip = New System.Windows.Forms.ToolTip(Me.components)
+        Me.grpFtpSettings.SuspendLayout()
+        Me.grpSyncSettings.SuspendLayout()
+        Me.grpDirection.SuspendLayout()
+        Me.grpSync.SuspendLayout()
+        Me.statusStrip.SuspendLayout()
+        Me.SuspendLayout()
+        '
+        'grpFtpSettings
+        '
+        Me.grpFtpSettings.Anchor = CType(((System.Windows.Forms.AnchorStyles.Top Or System.Windows.Forms.AnchorStyles.Left) _
+            Or System.Windows.Forms.AnchorStyles.Right), System.Windows.Forms.AnchorStyles)
+        Me.grpFtpSettings.Controls.Add(Me.lblServerHint)
+        Me.grpFtpSettings.Controls.Add(Me.btnTestConnection)
+        Me.grpFtpSettings.Controls.Add(Me.txtFtpPassword)
+        Me.grpFtpSettings.Controls.Add(Me.txtFtpUsername)
+        Me.grpFtpSettings.Controls.Add(Me.txtFtpServer)
+        Me.grpFtpSettings.Controls.Add(Me.lblFtpPassword)
+        Me.grpFtpSettings.Controls.Add(Me.lblFtpUsername)
+        Me.grpFtpSettings.Controls.Add(Me.lblFtpServer)
+        Me.grpFtpSettings.Font = New System.Drawing.Font("Microsoft Sans Serif", 9.75!, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point)
+        Me.grpFtpSettings.Location = New System.Drawing.Point(12, 12)
+        Me.grpFtpSettings.Name = "grpFtpSettings"
+        Me.grpFtpSettings.Size = New System.Drawing.Size(560, 150)
+        Me.grpFtpSettings.TabIndex = 0
+        Me.grpFtpSettings.TabStop = False
+        Me.grpFtpSettings.Text = "FTP Connection Settings"
+        '
+        'lblServerHint
+        '
+        Me.lblServerHint.AutoSize = True
+        Me.lblServerHint.Font = New System.Drawing.Font("Microsoft Sans Serif", 8.0!, System.Drawing.FontStyle.Italic, System.Drawing.GraphicsUnit.Point)
+        Me.lblServerHint.ForeColor = System.Drawing.Color.Gray
+        Me.lblServerHint.Location = New System.Drawing.Point(90, 53)
+        Me.lblServerHint.Name = "lblServerHint"
+        Me.lblServerHint.Size = New System.Drawing.Size(297, 13)
+        Me.lblServerHint.TabIndex = 7
+        Me.lblServerHint.Text = "Examples: 192.168.1.100, server.com:2121, ftp://host:port"
+        '
+        'btnTestConnection
+        '
+        Me.btnTestConnection.Anchor = CType((System.Windows.Forms.AnchorStyles.Top Or System.Windows.Forms.AnchorStyles.Right), System.Windows.Forms.AnchorStyles)
+        Me.btnTestConnection.BackColor = System.Drawing.Color.SteelBlue
+        Me.btnTestConnection.FlatStyle = System.Windows.Forms.FlatStyle.Flat
+        Me.btnTestConnection.Font = New System.Drawing.Font("Microsoft Sans Serif", 9.0!, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point)
+        Me.btnTestConnection.ForeColor = System.Drawing.Color.White
+        Me.btnTestConnection.Location = New System.Drawing.Point(440, 105)
+        Me.btnTestConnection.Name = "btnTestConnection"
+        Me.btnTestConnection.Size = New System.Drawing.Size(110, 30)
+        Me.btnTestConnection.TabIndex = 6
+        Me.btnTestConnection.Text = "Test Connection"
+        Me.toolTip.SetToolTip(Me.btnTestConnection, "Test the FTP connection with current settings")
+        Me.btnTestConnection.UseVisualStyleBackColor = False
+        '
+        'txtFtpPassword
+        '
+        Me.txtFtpPassword.Anchor = CType(((System.Windows.Forms.AnchorStyles.Top Or System.Windows.Forms.AnchorStyles.Left) _
+            Or System.Windows.Forms.AnchorStyles.Right), System.Windows.Forms.AnchorStyles)
+        Me.txtFtpPassword.Font = New System.Drawing.Font("Microsoft Sans Serif", 9.0!, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point)
+        Me.txtFtpPassword.Location = New System.Drawing.Point(90, 110)
+        Me.txtFtpPassword.Name = "txtFtpPassword"
+        Me.txtFtpPassword.PasswordChar = Global.Microsoft.VisualBasic.ChrW(42)
+        Me.txtFtpPassword.Size = New System.Drawing.Size(330, 21)
+        Me.txtFtpPassword.TabIndex = 5
+        Me.toolTip.SetToolTip(Me.txtFtpPassword, "FTP password (stored encrypted)")
+        '
+        'txtFtpUsername
+        '
+        Me.txtFtpUsername.Anchor = CType(((System.Windows.Forms.AnchorStyles.Top Or System.Windows.Forms.AnchorStyles.Left) _
+            Or System.Windows.Forms.AnchorStyles.Right), System.Windows.Forms.AnchorStyles)
+        Me.txtFtpUsername.Font = New System.Drawing.Font("Microsoft Sans Serif", 9.0!, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point)
+        Me.txtFtpUsername.Location = New System.Drawing.Point(90, 80)
+        Me.txtFtpUsername.Name = "txtFtpUsername"
+        Me.txtFtpUsername.Size = New System.Drawing.Size(460, 21)
+        Me.txtFtpUsername.TabIndex = 4
+        Me.toolTip.SetToolTip(Me.txtFtpUsername, "FTP username")
+        '
+        'txtFtpServer
+        '
+        Me.txtFtpServer.Anchor = CType(((System.Windows.Forms.AnchorStyles.Top Or System.Windows.Forms.AnchorStyles.Left) _
+            Or System.Windows.Forms.AnchorStyles.Right), System.Windows.Forms.AnchorStyles)
+        Me.txtFtpServer.Font = New System.Drawing.Font("Microsoft Sans Serif", 9.0!, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point)
+        Me.txtFtpServer.Location = New System.Drawing.Point(90, 30)
+        Me.txtFtpServer.Name = "txtFtpServer"
+        Me.txtFtpServer.Size = New System.Drawing.Size(460, 21)
+        Me.txtFtpServer.TabIndex = 3
+        Me.toolTip.SetToolTip(Me.txtFtpServer, "FTP server address. Supports: hostname, IP:port, or ftp://server:port")
+        '
+        'lblFtpPassword
+        '
+        Me.lblFtpPassword.AutoSize = True
+        Me.lblFtpPassword.Font = New System.Drawing.Font("Microsoft Sans Serif", 9.0!, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point)
+        Me.lblFtpPassword.Location = New System.Drawing.Point(15, 113)
+        Me.lblFtpPassword.Name = "lblFtpPassword"
+        Me.lblFtpPassword.Size = New System.Drawing.Size(61, 15)
+        Me.lblFtpPassword.TabIndex = 2
+        Me.lblFtpPassword.Text = "Password:"
+        '
+        'lblFtpUsername
+        '
+        Me.lblFtpUsername.AutoSize = True
+        Me.lblFtpUsername.Font = New System.Drawing.Font("Microsoft Sans Serif", 9.0!, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point)
+        Me.lblFtpUsername.Location = New System.Drawing.Point(15, 83)
+        Me.lblFtpUsername.Name = "lblFtpUsername"
+        Me.lblFtpUsername.Size = New System.Drawing.Size(68, 15)
+        Me.lblFtpUsername.TabIndex = 1
+        Me.lblFtpUsername.Text = "Username:"
+        '
+        'lblFtpServer
+        '
+        Me.lblFtpServer.AutoSize = True
+        Me.lblFtpServer.Font = New System.Drawing.Font("Microsoft Sans Serif", 9.0!, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point)
+        Me.lblFtpServer.Location = New System.Drawing.Point(15, 33)
+        Me.lblFtpServer.Name = "lblFtpServer"
+        Me.lblFtpServer.Size = New System.Drawing.Size(44, 15)
+        Me.lblFtpServer.TabIndex = 0
+        Me.lblFtpServer.Text = "Server:"
+        '
+        'grpSyncSettings
+        '
+        Me.grpSyncSettings.Anchor = CType(((System.Windows.Forms.AnchorStyles.Top Or System.Windows.Forms.AnchorStyles.Left) _
+            Or System.Windows.Forms.AnchorStyles.Right), System.Windows.Forms.AnchorStyles)
+        Me.grpSyncSettings.Controls.Add(Me.lblSyncDirection)
+        Me.grpSyncSettings.Controls.Add(Me.grpDirection)
+        Me.grpSyncSettings.Controls.Add(Me.btnBrowseLocal)
+        Me.grpSyncSettings.Controls.Add(Me.txtRemoteFolder)
+        Me.grpSyncSettings.Controls.Add(Me.txtLocalFolder)
+        Me.grpSyncSettings.Controls.Add(Me.lblRemoteFolder)
+        Me.grpSyncSettings.Controls.Add(Me.lblLocalFolder)
+        Me.grpSyncSettings.Font = New System.Drawing.Font("Microsoft Sans Serif", 9.75!, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point)
+        Me.grpSyncSettings.Location = New System.Drawing.Point(12, 175)
+        Me.grpSyncSettings.Name = "grpSyncSettings"
+        Me.grpSyncSettings.Size = New System.Drawing.Size(560, 180)
+        Me.grpSyncSettings.TabIndex = 1
+        Me.grpSyncSettings.TabStop = False
+        Me.grpSyncSettings.Text = "Synchronization Settings"
+        '
+        'lblSyncDirection
+        '
+        Me.lblSyncDirection.AutoSize = True
+        Me.lblSyncDirection.Font = New System.Drawing.Font("Microsoft Sans Serif", 12.0!, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point)
+        Me.lblSyncDirection.ForeColor = System.Drawing.Color.Blue
+        Me.lblSyncDirection.Location = New System.Drawing.Point(200, 145)
+        Me.lblSyncDirection.Name = "lblSyncDirection"
+        Me.lblSyncDirection.Size = New System.Drawing.Size(127, 20)
+        Me.lblSyncDirection.TabIndex = 6
+        Me.lblSyncDirection.Text = "Local → Remote"
+        '
+        'grpDirection
+        '
+        Me.grpDirection.Controls.Add(Me.rbRemoteToLocal)
+        Me.grpDirection.Controls.Add(Me.rbLocalToRemote)
+        Me.grpDirection.Font = New System.Drawing.Font("Microsoft Sans Serif", 9.0!, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point)
+        Me.grpDirection.Location = New System.Drawing.Point(15, 95)
+        Me.grpDirection.Name = "grpDirection"
+        Me.grpDirection.Size = New System.Drawing.Size(535, 40)
+        Me.grpDirection.TabIndex = 5
+        Me.grpDirection.TabStop = False
+        Me.grpDirection.Text = "Sync Direction"
+        '
+        'rbRemoteToLocal
+        '
+        Me.rbRemoteToLocal.AutoSize = True
+        Me.rbRemoteToLocal.Location = New System.Drawing.Point(200, 15)
+        Me.rbRemoteToLocal.Name = "rbRemoteToLocal"
+        Me.rbRemoteToLocal.Size = New System.Drawing.Size(118, 19)
+        Me.rbRemoteToLocal.TabIndex = 1
+        Me.rbRemoteToLocal.Text = "Remote to Local"
+        Me.rbRemoteToLocal.UseVisualStyleBackColor = True
+        '
+        'rbLocalToRemote
+        '
+        Me.rbLocalToRemote.AutoSize = True
+        Me.rbLocalToRemote.Checked = True
+        Me.rbLocalToRemote.Location = New System.Drawing.Point(15, 15)
+        Me.rbLocalToRemote.Name = "rbLocalToRemote"
+        Me.rbLocalToRemote.Size = New System.Drawing.Size(118, 19)
+        Me.rbLocalToRemote.TabIndex = 0
+        Me.rbLocalToRemote.TabStop = True
+        Me.rbLocalToRemote.Text = "Local to Remote"
+        Me.rbLocalToRemote.UseVisualStyleBackColor = True
+        '
+        'btnBrowseLocal
+        '
+        Me.btnBrowseLocal.Anchor = CType((System.Windows.Forms.AnchorStyles.Top Or System.Windows.Forms.AnchorStyles.Right), System.Windows.Forms.AnchorStyles)
+        Me.btnBrowseLocal.Font = New System.Drawing.Font("Microsoft Sans Serif", 9.0!, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point)
+        Me.btnBrowseLocal.Location = New System.Drawing.Point(500, 30)
+        Me.btnBrowseLocal.Name = "btnBrowseLocal"
+        Me.btnBrowseLocal.Size = New System.Drawing.Size(50, 21)
+        Me.btnBrowseLocal.TabIndex = 4
+        Me.btnBrowseLocal.Text = "..."
+        Me.toolTip.SetToolTip(Me.btnBrowseLocal, "Browse for local folder")
+        Me.btnBrowseLocal.UseVisualStyleBackColor = True
+        '
+        'txtRemoteFolder
+        '
+        Me.txtRemoteFolder.Anchor = CType(((System.Windows.Forms.AnchorStyles.Top Or System.Windows.Forms.AnchorStyles.Left) _
+            Or System.Windows.Forms.AnchorStyles.Right), System.Windows.Forms.AnchorStyles)
+        Me.txtRemoteFolder.Font = New System.Drawing.Font("Microsoft Sans Serif", 9.0!, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point)
+        Me.txtRemoteFolder.Location = New System.Drawing.Point(120, 60)
+        Me.txtRemoteFolder.Name = "txtRemoteFolder"
+        Me.txtRemoteFolder.Size = New System.Drawing.Size(430, 21)
+        Me.txtRemoteFolder.TabIndex = 3
+        Me.toolTip.SetToolTip(Me.txtRemoteFolder, "Remote folder/file path. For problematic servers, try exact file path like '/uploads/file.txt'")
+        '
+        'txtLocalFolder
+        '
+        Me.txtLocalFolder.Anchor = CType(((System.Windows.Forms.AnchorStyles.Top Or System.Windows.Forms.AnchorStyles.Left) _
+            Or System.Windows.Forms.AnchorStyles.Right), System.Windows.Forms.AnchorStyles)
+        Me.txtLocalFolder.Font = New System.Drawing.Font("Microsoft Sans Serif", 9.0!, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point)
+        Me.txtLocalFolder.Location = New System.Drawing.Point(120, 30)
+        Me.txtLocalFolder.Name = "txtLocalFolder"
+        Me.txtLocalFolder.ReadOnly = True
+        Me.txtLocalFolder.Size = New System.Drawing.Size(370, 21)
+        Me.txtLocalFolder.TabIndex = 2
+        Me.toolTip.SetToolTip(Me.txtLocalFolder, "Local folder path for synchronization")
+        '
+        'lblRemoteFolder
+        '
+        Me.lblRemoteFolder.AutoSize = True
+        Me.lblRemoteFolder.Font = New System.Drawing.Font("Microsoft Sans Serif", 9.0!, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point)
+        Me.lblRemoteFolder.Location = New System.Drawing.Point(15, 63)
+        Me.lblRemoteFolder.Name = "lblRemoteFolder"
+        Me.lblRemoteFolder.Size = New System.Drawing.Size(91, 15)
+        Me.lblRemoteFolder.TabIndex = 1
+        Me.lblRemoteFolder.Text = "Remote Path:"
+        '
+        'lblLocalFolder
+        '
+        Me.lblLocalFolder.AutoSize = True
+        Me.lblLocalFolder.Font = New System.Drawing.Font("Microsoft Sans Serif", 9.0!, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point)
+        Me.lblLocalFolder.Location = New System.Drawing.Point(15, 33)
+        Me.lblLocalFolder.Name = "lblLocalFolder"
+        Me.lblLocalFolder.Size = New System.Drawing.Size(78, 15)
+        Me.lblLocalFolder.TabIndex = 0
+        Me.lblLocalFolder.Text = "Local Folder:"
+        '
+        'grpSync
+        '
+        Me.grpSync.Anchor = CType(((System.Windows.Forms.AnchorStyles.Top Or System.Windows.Forms.AnchorStyles.Left) _
+            Or System.Windows.Forms.AnchorStyles.Right), System.Windows.Forms.AnchorStyles)
+        Me.grpSync.Controls.Add(Me.lblProgress)
+        Me.grpSync.Controls.Add(Me.progressBar)
+        Me.grpSync.Controls.Add(Me.btnSync)
+        Me.grpSync.Controls.Add(Me.btnViewLogs)
+        Me.grpSync.Font = New System.Drawing.Font("Microsoft Sans Serif", 9.75!, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point)
+        Me.grpSync.Location = New System.Drawing.Point(12, 370)
+        Me.grpSync.Name = "grpSync"
+        Me.grpSync.Size = New System.Drawing.Size(560, 120)
+        Me.grpSync.TabIndex = 2
+        Me.grpSync.TabStop = False
+        Me.grpSync.Text = "Synchronization Control"
+        '
+        'lblProgress
+        '
+        Me.lblProgress.Font = New System.Drawing.Font("Microsoft Sans Serif", 9.0!, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point)
+        Me.lblProgress.Location = New System.Drawing.Point(15, 55)
+        Me.lblProgress.Name = "lblProgress"
+        Me.lblProgress.Size = New System.Drawing.Size(535, 15)
+        Me.lblProgress.TabIndex = 2
+        Me.lblProgress.Text = "Ready to sync..."
+        Me.lblProgress.Visible = False
+        '
+        'progressBar
+        '
+        Me.progressBar.Anchor = CType(((System.Windows.Forms.AnchorStyles.Top Or System.Windows.Forms.AnchorStyles.Left) _
+            Or System.Windows.Forms.AnchorStyles.Right), System.Windows.Forms.AnchorStyles)
+        Me.progressBar.Location = New System.Drawing.Point(15, 75)
+        Me.progressBar.Name = "progressBar"
+        Me.progressBar.Size = New System.Drawing.Size(535, 25)
+        Me.progressBar.TabIndex = 1
+        Me.progressBar.Visible = False
+        '
+        'btnViewLogs
+        '
+        Me.btnViewLogs.Anchor = CType((System.Windows.Forms.AnchorStyles.Top Or System.Windows.Forms.AnchorStyles.Left), System.Windows.Forms.AnchorStyles)
+        Me.btnViewLogs.BackColor = System.Drawing.Color.DarkSlateGray
+        Me.btnViewLogs.FlatStyle = System.Windows.Forms.FlatStyle.Flat
+        Me.btnViewLogs.Font = New System.Drawing.Font("Microsoft Sans Serif", 9.0!, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point)
+        Me.btnViewLogs.ForeColor = System.Drawing.Color.White
+        Me.btnViewLogs.Location = New System.Drawing.Point(15, 20)
+        Me.btnViewLogs.Name = "btnViewLogs"
+        Me.btnViewLogs.Size = New System.Drawing.Size(100, 40)
+        Me.btnViewLogs.TabIndex = 3
+        Me.btnViewLogs.Text = "View Logs"
+        Me.toolTip.SetToolTip(Me.btnViewLogs, "Open log viewer to diagnose connection issues")
+        Me.btnViewLogs.UseVisualStyleBackColor = False
+        '
+        'btnSync
+        '
+        Me.btnSync.Anchor = CType((System.Windows.Forms.AnchorStyles.Top Or System.Windows.Forms.AnchorStyles.Right), System.Windows.Forms.AnchorStyles)
+        Me.btnSync.BackColor = System.Drawing.Color.LimeGreen
+        Me.btnSync.FlatStyle = System.Windows.Forms.FlatStyle.Flat
+        Me.btnSync.Font = New System.Drawing.Font("Microsoft Sans Serif", 12.0!, System.Drawing.FontStyle.Bold, System.Drawing.GraphicsUnit.Point)
+        Me.btnSync.ForeColor = System.Drawing.Color.White
+        Me.btnSync.Location = New System.Drawing.Point(430, 20)
+        Me.btnSync.Name = "btnSync"
+        Me.btnSync.Size = New System.Drawing.Size(120, 40)
+        Me.btnSync.TabIndex = 0
+        Me.btnSync.Text = "Start Sync"
+        Me.toolTip.SetToolTip(Me.btnSync, "Start synchronization process")
+        Me.btnSync.UseVisualStyleBackColor = False
+        '
+        'lblStatus
+        '
+        Me.lblStatus.Anchor = CType(((System.Windows.Forms.AnchorStyles.Bottom Or System.Windows.Forms.AnchorStyles.Left) _
+            Or System.Windows.Forms.AnchorStyles.Right), System.Windows.Forms.AnchorStyles)
+        Me.lblStatus.Font = New System.Drawing.Font("Microsoft Sans Serif", 9.0!, System.Drawing.FontStyle.Regular, System.Drawing.GraphicsUnit.Point)
+        Me.lblStatus.Location = New System.Drawing.Point(15, 500)
+        Me.lblStatus.Name = "lblStatus"
+        Me.lblStatus.Size = New System.Drawing.Size(557, 20)
+        Me.lblStatus.TabIndex = 3
+        Me.lblStatus.Text = "Ready"
+        '
+        'statusStrip
+        '
+        Me.statusStrip.Items.AddRange(New System.Windows.Forms.ToolStripItem() {Me.toolStripStatusLabel})
+        Me.statusStrip.Location = New System.Drawing.Point(0, 528)
+        Me.statusStrip.Name = "statusStrip"
+        Me.statusStrip.Size = New System.Drawing.Size(584, 22)
+        Me.statusStrip.TabIndex = 4
+        Me.statusStrip.Text = "StatusStrip1"
+        '
+        'toolStripStatusLabel
+        '
+        Me.toolStripStatusLabel.Name = "toolStripStatusLabel"
+        Me.toolStripStatusLabel.Size = New System.Drawing.Size(182, 17)
+        Me.toolStripStatusLabel.Text = "FTP Sync Application v1.0 - Ready"
+        '
+        'folderBrowserDialog
+        '
+        Me.folderBrowserDialog.Description = "Select Local Folder for Synchronization"
+        '
+        'toolTip
+        '
+        '
+        'frmMain
+        '
+        Me.AutoScaleDimensions = New System.Drawing.SizeF(7.0!, 15.0!)
+        Me.AutoScaleMode = System.Windows.Forms.AutoScaleMode.Font
+        Me.ClientSize = New System.Drawing.Size(584, 550)
+        Me.Controls.Add(Me.statusStrip)
+        Me.Controls.Add(Me.lblStatus)
+        Me.Controls.Add(Me.grpSync)
+        Me.Controls.Add(Me.grpSyncSettings)
+        Me.Controls.Add(Me.grpFtpSettings)
+        Me.MinimumSize = New System.Drawing.Size(600, 590)
+        Me.Name = "frmMain"
+        Me.StartPosition = System.Windows.Forms.FormStartPosition.CenterScreen
+        Me.Text = "FTP Folder Synchronizer"
+        Me.grpFtpSettings.ResumeLayout(False)
+        Me.grpFtpSettings.PerformLayout()
+        Me.grpSyncSettings.ResumeLayout(False)
+        Me.grpSyncSettings.PerformLayout()
+        Me.grpDirection.ResumeLayout(False)
+        Me.grpDirection.PerformLayout()
+        Me.grpSync.ResumeLayout(False)
+        Me.statusStrip.ResumeLayout(False)
+        Me.statusStrip.PerformLayout()
+        Me.ResumeLayout(False)
+        Me.PerformLayout()
+
+    End Sub
+
+    Friend WithEvents grpFtpSettings As GroupBox
+    Friend WithEvents lblServerHint As Label
+    Friend WithEvents btnTestConnection As Button
+    Friend WithEvents txtFtpPassword As TextBox
+    Friend WithEvents txtFtpUsername As TextBox
+    Friend WithEvents txtFtpServer As TextBox
+    Friend WithEvents lblFtpPassword As Label
+    Friend WithEvents lblFtpUsername As Label
+    Friend WithEvents lblFtpServer As Label
+    Friend WithEvents grpSyncSettings As GroupBox
+    Friend WithEvents lblSyncDirection As Label
+    Friend WithEvents grpDirection As GroupBox
+    Friend WithEvents rbRemoteToLocal As RadioButton
+    Friend WithEvents rbLocalToRemote As RadioButton
+    Friend WithEvents btnBrowseLocal As Button
+    Friend WithEvents txtRemoteFolder As TextBox
+    Friend WithEvents txtLocalFolder As TextBox
+    Friend WithEvents lblRemoteFolder As Label
+    Friend WithEvents lblLocalFolder As Label
+    Friend WithEvents grpSync As GroupBox
+    Friend WithEvents lblProgress As Label
+    Friend WithEvents progressBar As ProgressBar
+    Friend WithEvents btnViewLogs As Button
+    Friend WithEvents btnSync As Button
+    Friend WithEvents lblStatus As Label
+    Friend WithEvents statusStrip As StatusStrip
+    Friend WithEvents toolStripStatusLabel As ToolStripStatusLabel
+    Friend WithEvents folderBrowserDialog As FolderBrowserDialog
+    Friend WithEvents toolTip As ToolTip
+End Class
+
+==================== FILE: frmMain.resx ====================
+<?xml version="1.0" encoding="utf-8"?>
+<root>
+  <!-- 
+    Microsoft ResX Schema 
+    
+    Version 2.0
+    
+    The primary goals of this format is to allow a simple XML format 
+    that is mostly human readable. The generation and parsing of the 
+    various data types are done through the TypeConverter classes 
+    associated with the data types.
+    
+    Example:
+    
+    ... ado.net/XML headers & schema ...
+    <resheader name="resmimetype">text/microsoft-resx</resheader>
+    <resheader name="version">2.0</resheader>
+    <resheader name="reader">System.Resources.ResXResourceReader, System.Windows.Forms, ...</resheader>
+    <resheader name="writer">System.Resources.ResXResourceWriter, System.Windows.Forms, ...</resheader>
+    <data name="Name1"><value>this is my long string</value><comment>this is a comment</comment></data>
+    <data name="Color1" type="System.Drawing.Color, System.Drawing">Blue</data>
+    <data name="Bitmap1" mimetype="application/x-microsoft.net.object.binary.base64">
+        <value>[base64 mime encoded serialized .NET Framework object]</value>
+    </data>
+    <data name="Icon1" type="System.Drawing.Icon, System.Drawing" mimetype="application/x-microsoft.net.object.bytearray.base64">
+        <value>[base64 mime encoded string representing a byte array form of the .NET Framework object]</value>
+        <comment>This is a comment</comment>
+    </data>
+                
+    There are any number of "resheader" rows that contain simple 
+    name/value pairs.
+    
+    Each data row contains a name, and value. The row also contains a 
+    type or mimetype. Type corresponds to a .NET class that support 
+    text/value conversion through the TypeConverter architecture. 
+    Classes that don't support this are serialized and stored with the 
+    mimetype set.
+    
+    The mimetype is used for serialized objects, and tells the 
+    ResXResourceReader how to depersist the object. This is currently not 
+    extensible. For a given mimetype the value must be set accordingly:
+    
+    Note - application/x-microsoft.net.object.binary.base64 is the format 
+    that the ResXResourceWriter will generate, however the reader can 
+    read any of the formats listed below.
+    
+    mimetype: application/x-microsoft.net.object.binary.base64
+    value   : The object must be serialized with 
+            : System.Runtime.Serialization.Formatters.Binary.BinaryFormatter
+            : and then encoded with base64 encoding.
+    
+    mimetype: application/x-microsoft.net.object.soap.base64
+    value   : The object must be serialized with 
+            : System.Runtime.Serialization.Formatters.Soap.SoapFormatter
+            : and then encoded with base64 encoding.
+
+    mimetype: application/x-microsoft.net.object.bytearray.base64
+    value   : The object must be serialized into a byte array 
+            : using a System.ComponentModel.TypeConverter
+            : and then encoded with base64 encoding.
+    -->
+  <xsd:schema id="root" xmlns="" xmlns:xsd="http://www.w3.org/2001/XMLSchema" xmlns:msdata="urn:schemas-microsoft-com:xml-msdata">
+    <xsd:import namespace="http://www.w3.org/XML/1998/namespace" />
+    <xsd:element name="root" msdata:IsDataSet="true">
+      <xsd:complexType>
+        <xsd:choice maxOccurs="unbounded">
+          <xsd:element name="metadata">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" />
+              </xsd:sequence>
+              <xsd:attribute name="name" use="required" type="xsd:string" />
+              <xsd:attribute name="type" type="xsd:string" />
+              <xsd:attribute name="mimetype" type="xsd:string" />
+              <xsd:attribute ref="xml:space" />
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="assembly">
+            <xsd:complexType>
+              <xsd:attribute name="alias" type="xsd:string" />
+              <xsd:attribute name="name" type="xsd:string" />
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="data">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+                <xsd:element name="comment" type="xsd:string" minOccurs="0" msdata:Ordinal="2" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" use="required" msdata:Ordinal="1" />
+              <xsd:attribute name="type" type="xsd:string" msdata:Ordinal="3" />
+              <xsd:attribute name="mimetype" type="xsd:string" msdata:Ordinal="4" />
+              <xsd:attribute ref="xml:space" />
+            </xsd:complexType>
+          </xsd:element>
+          <xsd:element name="resheader">
+            <xsd:complexType>
+              <xsd:sequence>
+                <xsd:element name="value" type="xsd:string" minOccurs="0" msdata:Ordinal="1" />
+              </xsd:sequence>
+              <xsd:attribute name="name" type="xsd:string" use="required" />
+            </xsd:complexType>
+          </xsd:element>
+        </xsd:choice>
+      </xsd:complexType>
+    </xsd:element>
+  </xsd:schema>
+  <resheader name="resmimetype">
+    <value>text/microsoft-resx</value>
+  </resheader>
+  <resheader name="version">
+    <value>2.0</value>
+  </resheader>
+  <resheader name="reader">
+    <value>System.Resources.ResXResourceReader, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+  <resheader name="writer">
+    <value>System.Resources.ResXResourceWriter, System.Windows.Forms, Version=4.0.0.0, Culture=neutral, PublicKeyToken=b77a5c561934e089</value>
+  </resheader>
+</root>
+
+==================== FILE: frmMain.vb ====================
+Imports System.ComponentModel
+Imports System.IO
+Imports System.Net
+Imports System.Security.Cryptography
+Imports System.Text
+Imports System.Threading.Tasks
+Imports System.Runtime.InteropServices
+Imports FluentFTP
+Imports FluentFTP.Exceptions
+
+Public Class frmMain
+    Private configManager As ConfigManager
+    Private cancelTokenSource As Threading.CancellationTokenSource
+    Private syncInProgress As Boolean = False
+    Private logger As Logger = Logger.Instance
+    Private isFormLoading As Boolean = True
+
+    Public Sub New()
+        InitializeComponent()
+        Try
+            logger.Info("Application starting...")
+            configManager = New ConfigManager()
+            logger.Info("ConfigManager initialized successfully")
+        Catch ex As Exception
+            logger.Critical("Error initializing application", ex)
+            MessageBox.Show($"Error initializing application: {ex.Message}", "Initialization Error", MessageBoxButtons.OK, MessageBoxIcon.Error)
+        End Try
+    End Sub
+
+    Private Sub frmMain_Load(sender As Object, e As EventArgs) Handles MyBase.Load
+        logger.Info("Form loading...")
+        isFormLoading = True
+
+        If configManager IsNot Nothing Then
+            LoadConfiguration()
+        End If
+        UpdateSyncDirectionLabel()
+
+        logger.ClearOldLogs(7)
+        isFormLoading = False
+        logger.Info("Application loaded successfully")
+    End Sub
+
+    Private Sub LoadConfiguration()
+        Try
+            logger.Debug("Loading configuration...")
+
+            If configManager Is Nothing Then
+                configManager = New ConfigManager()
+                logger.Warning("ConfigManager was null, created new instance")
+            End If
+
+            If txtFtpServer IsNot Nothing Then
+                Dim serverValue As String = configManager.GetValue("FTP", "Server", "")
+                txtFtpServer.Text = serverValue
+                logger.Debug($"Loaded FTP Server: {If(String.IsNullOrEmpty(serverValue), "(empty)", serverValue)}")
+            End If
+
+            If txtFtpUsername IsNot Nothing Then
+                Dim usernameValue As String = configManager.GetValue("FTP", "Username", "")
+                txtFtpUsername.Text = usernameValue
+                logger.Debug($"Loaded FTP Username: {If(String.IsNullOrEmpty(usernameValue), "(empty)", usernameValue)}")
+            End If
+
+            If txtFtpPassword IsNot Nothing Then
+                Dim passwordValue As String = configManager.GetDecryptedValue("FTP", "Password", "")
+                txtFtpPassword.Text = passwordValue
+                logger.Debug($"Loaded FTP Password: {If(String.IsNullOrEmpty(passwordValue), "(empty)", "***")}")
+            End If
+
+            If txtLocalFolder IsNot Nothing Then
+                Dim localFolderValue As String = configManager.GetValue("Sync", "LocalFolder", "")
+                txtLocalFolder.Text = localFolderValue
+                logger.Debug($"Loaded Local Folder: {If(String.IsNullOrEmpty(localFolderValue), "(empty)", localFolderValue)}")
+            End If
+
+            If txtRemoteFolder IsNot Nothing Then
+                Dim remoteFolderValue As String = configManager.GetValue("Sync", "RemoteFolder", "")
+                txtRemoteFolder.Text = remoteFolderValue
+                logger.Debug($"Loaded Remote Folder: {If(String.IsNullOrEmpty(remoteFolderValue), "(empty)", remoteFolderValue)}")
+            End If
+
+            Dim direction As String = configManager.GetValue("Sync", "Direction", "LocalToRemote")
+            If rbLocalToRemote IsNot Nothing Then
+                rbLocalToRemote.Checked = (direction = "LocalToRemote")
+            End If
+            If rbRemoteToLocal IsNot Nothing Then
+                rbRemoteToLocal.Checked = (direction = "RemoteToLocal")
+            End If
+
+            logger.Debug($"Loaded Sync Direction: {direction}")
+            logger.Info("Configuration loaded successfully")
+        Catch ex As Exception
+            logger.Error("Error loading configuration", ex)
+            MessageBox.Show($"Error loading configuration: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error)
+        End Try
+    End Sub
+
+    Private Sub SaveConfiguration()
+        Try
+            logger.Debug("Saving configuration...")
+
+            If configManager Is Nothing Then
+                configManager = New ConfigManager()
+                logger.Warning("ConfigManager was null, created new instance")
+            End If
+
+            Dim serverText As String = If(txtFtpServer?.Text, "")
+            Dim usernameText As String = If(txtFtpUsername?.Text, "")
+            Dim passwordText As String = If(txtFtpPassword?.Text, "")
+            Dim localFolderText As String = If(txtLocalFolder?.Text, "")
+            Dim remoteFolderText As String = If(txtRemoteFolder?.Text, "")
+
+            configManager.SetValue("FTP", "Server", serverText)
+            configManager.SetValue("FTP", "Username", usernameText)
+            configManager.SetEncryptedValue("FTP", "Password", passwordText)
+            configManager.SetValue("Sync", "LocalFolder", localFolderText)
+            configManager.SetValue("Sync", "RemoteFolder", remoteFolderText)
+
+            Dim direction As String = If(rbLocalToRemote?.Checked = True, "LocalToRemote", "RemoteToLocal")
+            configManager.SetValue("Sync", "Direction", direction)
+
+            configManager.SaveConfiguration()
+            logger.Info("Configuration saved successfully")
+        Catch ex As Exception
+            logger.Error("Error saving configuration", ex)
+            MessageBox.Show($"Error saving configuration: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error)
+        End Try
+    End Sub
+
+    Private Sub btnBrowseLocal_Click(sender As Object, e As EventArgs) Handles btnBrowseLocal.Click
+        Using dialog As New FolderBrowserDialog()
+            dialog.Description = "Select Local Folder"
+            If txtLocalFolder IsNot Nothing Then
+                dialog.SelectedPath = txtLocalFolder.Text
+            End If
+
+            If dialog.ShowDialog() = DialogResult.OK Then
+                If txtLocalFolder IsNot Nothing Then
+                    txtLocalFolder.Text = dialog.SelectedPath
+                    logger.Info($"User selected local folder: {dialog.SelectedPath}")
+                    SaveConfiguration()
+                End If
+            End If
+        End Using
+    End Sub
+
+    Private Sub btnTestConnection_Click(sender As Object, e As EventArgs) Handles btnTestConnection.Click
+        Dim serverText As String = If(txtFtpServer?.Text, "")
+        Dim usernameText As String = If(txtFtpUsername?.Text, "")
+
+        If String.IsNullOrWhiteSpace(serverText) OrElse String.IsNullOrWhiteSpace(usernameText) Then
+            logger.Warning("Test connection attempted with missing server or username")
+            MessageBox.Show("Please enter FTP server and username.", "Missing Information", MessageBoxButtons.OK, MessageBoxIcon.Warning)
+            Return
+        End If
+
+        logger.Info("User initiated FTP connection test")
+        If btnTestConnection IsNot Nothing Then
+            btnTestConnection.Enabled = False
+        End If
+        If lblStatus IsNot Nothing Then
+            lblStatus.Text = "Testing connection..."
+        End If
+
+        Task.Run(Async Function()
+                     Try
+                         Dim testResult As Boolean = Await TestFtpConnection()
+
+                         Me.Invoke(Sub()
+                                       If testResult Then
+                                           If lblStatus IsNot Nothing Then
+                                               lblStatus.Text = "Connection successful!"
+                                               lblStatus.ForeColor = Color.Green
+                                           End If
+                                           logger.Info("FTP connection test successful - User notified")
+                                           MessageBox.Show("FTP connection successful!", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information)
+                                       Else
+                                           If lblStatus IsNot Nothing Then
+                                               lblStatus.Text = "Connection failed!"
+                                               lblStatus.ForeColor = Color.Red
+                                           End If
+                                           logger.Warning("FTP connection test failed - User notified")
+                                           MessageBox.Show("FTP connection failed. Please check your credentials and view logs for details.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error)
+                                       End If
+                                       If btnTestConnection IsNot Nothing Then
+                                           btnTestConnection.Enabled = True
+                                       End If
+                                   End Sub)
+                     Catch ex As Exception
+                         logger.Error("Unexpected error during connection test", ex)
+                         Me.Invoke(Sub()
+                                       If lblStatus IsNot Nothing Then
+                                           lblStatus.Text = "Connection error!"
+                                           lblStatus.ForeColor = Color.Red
+                                       End If
+                                       MessageBox.Show($"Connection error: {ex.Message}" & vbCrLf & vbCrLf & "Check logs for detailed information.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error)
+                                       If btnTestConnection IsNot Nothing Then
+                                           btnTestConnection.Enabled = True
+                                       End If
+                                   End Sub)
+                     End Try
+                 End Function)
+    End Sub
+
+    Private Sub btnViewLogs_Click(sender As Object, e As EventArgs) Handles btnViewLogs.Click
+        Try
+            logger.Info("User opened log viewer")
+
+            Dim recentLogs As String() = logger.GetRecentLogs(50)
+
+            If recentLogs.Length > 0 Then
+                Dim logText As String = String.Join(Environment.NewLine, recentLogs)
+
+                Dim logForm As New Form()
+                logForm.Text = "FTP Sync - Log Viewer"
+                logForm.Size = New Size(800, 600)
+                logForm.StartPosition = FormStartPosition.CenterParent
+                logForm.ShowIcon = False
+
+                Dim txtLog As New TextBox()
+                txtLog.Multiline = True
+                txtLog.ReadOnly = True
+                txtLog.ScrollBars = ScrollBars.Both
+                txtLog.Font = New Font("Consolas", 9)
+                txtLog.Dock = DockStyle.Fill
+                txtLog.Text = logText
+                txtLog.WordWrap = False
+
+                Dim panel As New Panel()
+                panel.Dock = DockStyle.Bottom
+                panel.Height = 40
+
+                Dim btnClose As New Button()
+                btnClose.Text = "Close"
+                btnClose.Size = New Size(75, 23)
+                btnClose.Anchor = AnchorStyles.Bottom Or AnchorStyles.Right
+                btnClose.Location = New Point(logForm.Width - 90, 8)
+                AddHandler btnClose.Click, Sub() logForm.Close()
+
+                Dim btnBrowseFtp As New Button()
+                btnBrowseFtp.Text = "Browse FTP"
+                btnBrowseFtp.Size = New Size(100, 23)
+                btnBrowseFtp.Anchor = AnchorStyles.Bottom Or AnchorStyles.Right
+                btnBrowseFtp.Location = New Point(logForm.Width - 200, 8)
+                AddHandler btnBrowseFtp.Click, Sub()
+                                                   logForm.Hide()
+                                                   BrowseFtpDirectories()
+                                                   logForm.Show()
+                                               End Sub
+
+                Dim lblPath As New Label()
+                lblPath.Text = $"Log file: {logger.GetLogFilePath()}"
+                lblPath.Dock = DockStyle.Left
+                lblPath.TextAlign = ContentAlignment.MiddleLeft
+                lblPath.AutoSize = False
+                lblPath.Width = 400
+
+                panel.Controls.Add(btnClose)
+                panel.Controls.Add(btnBrowseFtp)
+                panel.Controls.Add(lblPath)
+                logForm.Controls.Add(txtLog)
+                logForm.Controls.Add(panel)
+
+                txtLog.SelectionStart = txtLog.Text.Length
+                txtLog.ScrollToCaret()
+
+                logForm.ShowDialog()
+            Else
+                MessageBox.Show("No log entries found.", "Log Viewer", MessageBoxButtons.OK, MessageBoxIcon.Information)
+            End If
+
+        Catch ex As Exception
+            logger.Error("Failed to open log viewer", ex)
+            MessageBox.Show($"Error opening log viewer: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error)
+        End Try
+    End Sub
+
+    Private Sub BrowseFtpDirectories()
+        Try
+            logger.Info("User initiated FTP directory browser")
+
+            Task.Run(Async Function()
+                         Try
+                             Dim serverText As String = If(txtFtpServer?.Text, "")
+                             Dim usernameText As String = If(txtFtpUsername?.Text, "")
+                             Dim passwordText As String = If(txtFtpPassword?.Text, "")
+
+                             If String.IsNullOrWhiteSpace(serverText) OrElse String.IsNullOrWhiteSpace(usernameText) Then
+                                 Me.Invoke(Sub() MessageBox.Show("Please enter FTP server and username first.", "Missing Information", MessageBoxButtons.OK, MessageBoxIcon.Warning))
+                                 Return
+                             End If
+
+                             Dim host As String = ""
+                             Dim port As Integer = 21
+                             ParseFtpUrl(serverText, host, port)
+
+                             Using client As New AsyncFtpClient()
+                                 client.Host = host
+                                 client.Port = port
+                                 client.Credentials = New System.Net.NetworkCredential(usernameText, passwordText)
+                                 client.Config.ConnectTimeout = 15000
+                                 client.Config.DataConnectionType = FtpDataConnectionType.AutoPassive
+
+                                 Await client.AutoConnect()
+                                 logger.Info("Connected to FTP server for browsing")
+
+                                 Dim items = Await client.GetListing("/", FtpListOption.NoPath)
+
+                                 Dim directoryInfo As New StringBuilder()
+                                 directoryInfo.AppendLine("FTP Server Directory Structure:")
+                                 directoryInfo.AppendLine("=" & New String("="c, 40))
+                                 directoryInfo.AppendLine()
+
+                                 Dim fileCount As Integer = 0
+                                 Dim dirCount As Integer = 0
+
+                                 For Each item In items
+                                     Select Case item.Type
+                                         Case FtpObjectType.File
+                                             directoryInfo.AppendLine($"📄 {item.Name} ({If(item.Size >= 0, item.Size.ToString() & " bytes", "unknown size")})")
+                                             fileCount += 1
+                                         Case FtpObjectType.Directory
+                                             directoryInfo.AppendLine($"📁 {item.Name}/")
+                                             dirCount += 1
+
+                                             ' Try to peek into subdirectory
+                                             Try
+                                                 Dim subItems = Await client.GetListing($"/{item.Name}", FtpListOption.NoPath)
+                                                 Dim subFiles = subItems.Where(Function(si) si.Type = FtpObjectType.File).Count()
+                                                 Dim subDirs = subItems.Where(Function(si) si.Type = FtpObjectType.Directory).Count()
+                                                 If subFiles > 0 OrElse subDirs > 0 Then
+                                                     directoryInfo.AppendLine($"   └─ Contains: {subFiles} files, {subDirs} folders")
+                                                 End If
+                                             Catch
+                                                 directoryInfo.AppendLine($"   └─ (Cannot access)")
+                                             End Try
+                                         Case Else
+                                             directoryInfo.AppendLine($"❓ {item.Name} (Unknown type)")
+                                     End Select
+                                 Next
+
+                                 directoryInfo.AppendLine()
+                                 directoryInfo.AppendLine($"Summary: {fileCount} files, {dirCount} directories")
+                                 directoryInfo.AppendLine()
+                                 directoryInfo.AppendLine("To download files from a specific directory:")
+                                 directoryInfo.AppendLine("Enter the full path in Remote Folder field, like:")
+                                 For Each dirItem In items.Where(Function(i) i.Type = FtpObjectType.Directory).Take(3)
+                                     directoryInfo.AppendLine($"  /{dirItem.Name}/")
+                                 Next
+
+                                 Await client.Disconnect()
+
+                                 Me.Invoke(Sub()
+                                               Dim browseForm As New Form()
+                                               browseForm.Text = "FTP Directory Browser"
+                                               browseForm.Size = New Size(600, 500)
+                                               browseForm.StartPosition = FormStartPosition.CenterParent
+
+                                               Dim txtBrowse As New TextBox()
+                                               txtBrowse.Multiline = True
+                                               txtBrowse.ReadOnly = True
+                                               txtBrowse.ScrollBars = ScrollBars.Both
+                                               txtBrowse.Font = New Font("Consolas", 9)
+                                               txtBrowse.Dock = DockStyle.Fill
+                                               txtBrowse.Text = directoryInfo.ToString()
+
+                                               Dim btnCloseBrowse As New Button()
+                                               btnCloseBrowse.Text = "Close"
+                                               btnCloseBrowse.Dock = DockStyle.Bottom
+                                               btnCloseBrowse.Height = 30
+                                               AddHandler btnCloseBrowse.Click, Sub() browseForm.Close()
+
+                                               browseForm.Controls.Add(txtBrowse)
+                                               browseForm.Controls.Add(btnCloseBrowse)
+                                               browseForm.ShowDialog()
+                                           End Sub)
+                             End Using
+
+                         Catch ex As Exception
+                             logger.Error("Error browsing FTP directories", ex)
+                             Me.Invoke(Sub() MessageBox.Show($"Error browsing FTP directories: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error))
+                         End Try
+                     End Function)
+
+        Catch ex As Exception
+            logger.Error("Failed to start FTP directory browser", ex)
+            MessageBox.Show($"Error starting FTP browser: {ex.Message}", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error)
+        End Try
+    End Sub
+
+    Private Async Function TestFtpConnection() As Task(Of Boolean)
+        Try
+            logger.Info("Testing FTP connection...")
+            Dim host As String = ""
+            Dim port As Integer = 21
+
+            Dim serverText As String = If(txtFtpServer?.Text, "")
+            Dim usernameText As String = If(txtFtpUsername?.Text, "")
+            Dim passwordText As String = If(txtFtpPassword?.Text, "")
+
+            ParseFtpUrl(serverText, host, port)
+            logger.Debug($"Parsed server - Host: {host}, Port: {port}")
+
+            logger.Info($"Attempting to connect to {host}:{port} with username: {usernameText}")
+
+            Using client As New AsyncFtpClient()
+                client.Host = host
+                client.Port = port
+                client.Credentials = New System.Net.NetworkCredential(usernameText, passwordText)
+
+                logger.Debug("Configuring FTP client...")
+                client.Config.ConnectTimeout = 15000
+                client.Config.DataConnectionType = FtpDataConnectionType.AutoPassive
+                client.Config.PassiveMaxAttempts = 5
+                client.Config.DataConnectionConnectTimeout = 15000
+                client.Config.DataConnectionReadTimeout = 15000
+
+                logger.Debug("Attempting AutoConnect...")
+                Await client.AutoConnect()
+
+                Dim isConnected As Boolean = client.IsConnected
+                logger.Info($"Connection result: {If(isConnected, "SUCCESS", "FAILED")}")
+
+                If isConnected Then
+                    logger.Debug("Testing basic FTP commands...")
+
+                    Try
+                        ' Try to get working directory
+                        Dim workingDir As String = Await client.GetWorkingDirectory()
+                        logger.Debug($"Current working directory: {workingDir}")
+                    Catch ex As Exception
+                        logger.Warning("Could not get working directory", ex)
+                    End Try
+
+                    logger.Debug("Disconnecting from FTP server...")
+                    Await client.Disconnect()
+                    logger.Info("Successfully disconnected from FTP server")
+                End If
+
+                Return isConnected
+            End Using
+        Catch ex As Exception
+            logger.Error($"FTP connection test failed", ex)
+            Return False
+        End Try
+    End Function
+
+    Private Sub rbDirection_CheckedChanged(sender As Object, e As EventArgs) Handles rbLocalToRemote.CheckedChanged, rbRemoteToLocal.CheckedChanged
+        UpdateSyncDirectionLabel()
+
+        If Not isFormLoading Then
+            SaveConfiguration()
+        End If
+    End Sub
+
+    Private Sub UpdateSyncDirectionLabel()
+        If rbLocalToRemote IsNot Nothing AndAlso rbRemoteToLocal IsNot Nothing AndAlso lblSyncDirection IsNot Nothing Then
+            If rbLocalToRemote.Checked Then
+                lblSyncDirection.Text = "Local → Remote"
+                lblSyncDirection.ForeColor = Color.Blue
+            Else
+                lblSyncDirection.Text = "Remote → Local"
+                lblSyncDirection.ForeColor = Color.DarkGreen
+            End If
+        End If
+    End Sub
+
+    Private Sub btnSync_Click(sender As Object, e As EventArgs) Handles btnSync.Click
+        If syncInProgress Then
+            If cancelTokenSource IsNot Nothing Then
+                cancelTokenSource.Cancel()
+            End If
+            Return
+        End If
+
+        If Not ValidateInputs() Then
+            Return
+        End If
+
+        SaveConfiguration()
+        StartSync()
+    End Sub
+
+    Private Function ValidateInputs() As Boolean
+        Dim serverText As String = If(txtFtpServer?.Text, "")
+        Dim usernameText As String = If(txtFtpUsername?.Text, "")
+        Dim localFolderText As String = If(txtLocalFolder?.Text, "")
+
+        If String.IsNullOrWhiteSpace(serverText) Then
+            MessageBox.Show("Please enter FTP server address." & vbCrLf & vbCrLf &
+                          "Examples:" & vbCrLf &
+                          "• 192.168.1.100" & vbCrLf &
+                          "• ftp.example.com:2121" & vbCrLf &
+                          "• ftp://192.168.31.132:2122",
+                          "Validation Error", MessageBoxButtons.OK, MessageBoxIcon.Warning)
+            If txtFtpServer IsNot Nothing Then
+                txtFtpServer.Focus()
+            End If
+            Return False
+        End If
+
+        If String.IsNullOrWhiteSpace(usernameText) Then
+            MessageBox.Show("Please enter FTP username.", "Validation Error", MessageBoxButtons.OK, MessageBoxIcon.Warning)
+            If txtFtpUsername IsNot Nothing Then
+                txtFtpUsername.Focus()
+            End If
+            Return False
+        End If
+
+        If String.IsNullOrWhiteSpace(localFolderText) Then
+            MessageBox.Show("Please select local folder.", "Validation Error", MessageBoxButtons.OK, MessageBoxIcon.Warning)
+            If btnBrowseLocal IsNot Nothing Then
+                btnBrowseLocal.Focus()
+            End If
+            Return False
+        End If
+
+        If Not Directory.Exists(localFolderText) Then
+            MessageBox.Show("Selected local folder does not exist.", "Validation Error", MessageBoxButtons.OK, MessageBoxIcon.Warning)
+            If btnBrowseLocal IsNot Nothing Then
+                btnBrowseLocal.Focus()
+            End If
+            Return False
+        End If
+
+        Return True
+    End Function
+
+    Private Sub StartSync()
+        Dim syncDirection As String = If(rbLocalToRemote?.Checked = True, "Local to Remote", "Remote to Local")
+        logger.Info($"Starting synchronization - Direction: {syncDirection}")
+        syncInProgress = True
+
+        If btnSync IsNot Nothing Then
+            btnSync.Text = "Cancel Sync"
+            btnSync.BackColor = Color.IndianRed
+        End If
+        If progressBar IsNot Nothing Then
+            progressBar.Value = 0
+            progressBar.Visible = True
+        End If
+        If lblProgress IsNot Nothing Then
+            lblProgress.Visible = True
+            lblProgress.Text = "Preparing sync..."
+        End If
+        If lblStatus IsNot Nothing Then
+            lblStatus.Text = "Synchronization in progress..."
+            lblStatus.ForeColor = Color.Blue
+        End If
+
+        cancelTokenSource = New Threading.CancellationTokenSource()
+
+        Task.Run(Async Function()
+                     Try
+                         If rbLocalToRemote?.Checked = True Then
+                             logger.Info("Starting Local to Remote synchronization")
+                             Await SyncLocalToRemote(cancelTokenSource.Token)
+                         Else
+                             logger.Info("Starting Remote to Local synchronization")
+                             Await SyncRemoteToLocal(cancelTokenSource.Token)
+                         End If
+
+                         logger.Info("Synchronization completed successfully")
+                         Me.Invoke(Sub()
+                                       If lblStatus IsNot Nothing Then
+                                           lblStatus.Text = "Synchronization completed successfully!"
+                                           lblStatus.ForeColor = Color.Green
+                                       End If
+                                       MessageBox.Show("Synchronization completed successfully!", "Success", MessageBoxButtons.OK, MessageBoxIcon.Information)
+                                   End Sub)
+                     Catch ex As OperationCanceledException
+                         logger.Warning("Synchronization was cancelled by user")
+                         Me.Invoke(Sub()
+                                       If lblStatus IsNot Nothing Then
+                                           lblStatus.Text = "Synchronization cancelled."
+                                           lblStatus.ForeColor = Color.Orange
+                                       End If
+                                   End Sub)
+                     Catch ex As Exception
+                         logger.Error("Synchronization failed", ex)
+                         Me.Invoke(Sub()
+                                       If lblStatus IsNot Nothing Then
+                                           lblStatus.Text = "Synchronization failed!"
+                                           lblStatus.ForeColor = Color.Red
+                                       End If
+                                       MessageBox.Show($"Synchronization error: {ex.Message}" & vbCrLf & vbCrLf & "Check logs for detailed information.", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error)
+                                   End Sub)
+                     Finally
+                         logger.Debug("Cleaning up synchronization UI state")
+                         Me.Invoke(Sub()
+                                       syncInProgress = False
+                                       If btnSync IsNot Nothing Then
+                                           btnSync.Text = "Start Sync"
+                                           btnSync.BackColor = Color.LimeGreen
+                                       End If
+                                       If progressBar IsNot Nothing Then
+                                           progressBar.Visible = False
+                                       End If
+                                       If lblProgress IsNot Nothing Then
+                                           lblProgress.Visible = False
+                                       End If
+                                   End Sub)
+                     End Try
+                 End Function)
+    End Sub
+
+    Private Sub ParseFtpUrl(serverInput As String, ByRef host As String, ByRef port As Integer)
+        Try
+            logger.Debug($"Parsing FTP URL: '{serverInput}'")
+
+            If String.IsNullOrWhiteSpace(serverInput) Then
+                host = ""
+                port = 21
+                logger.Warning("Server input is empty or whitespace")
+                Return
+            End If
+
+            serverInput = serverInput.Trim()
+
+            If serverInput.ToLower().StartsWith("ftp://") Then
+                logger.Debug("Parsing as FTP URL")
+                Dim uri As New Uri(serverInput)
+                host = uri.Host
+                port = If(uri.Port = -1, 21, uri.Port)
+                logger.Debug($"URL parsed - Host: {host}, Port: {port}")
+            Else
+                If serverInput.Contains(":"c) Then
+                    logger.Debug("Parsing as host:port format")
+                    Dim parts() As String = serverInput.Split(":"c)
+                    If parts.Length = 2 Then
+                        host = parts(0).Trim()
+                        If Not Integer.TryParse(parts(1).Trim(), port) Then
+                            port = 21
+                            logger.Warning($"Failed to parse port '{parts(1)}', using default port 21")
+                        End If
+                        logger.Debug($"Host:Port parsed - Host: {host}, Port: {port}")
+                    Else
+                        host = serverInput
+                        port = 21
+                        logger.Warning($"Invalid host:port format, using as hostname with default port")
+                    End If
+                Else
+                    logger.Debug("Parsing as plain hostname/IP")
+                    host = serverInput
+                    port = 21
+                End If
+            End If
+
+            If String.IsNullOrWhiteSpace(host) Then
+                logger.Error("Parsed host is empty")
+                Throw New ArgumentException("Invalid server address")
+            End If
+
+            logger.Info($"Successfully parsed server - Host: {host}, Port: {port}")
+
+        Catch ex As Exception
+            logger.Error($"URL parsing failed for '{serverInput}', using as hostname with default port", ex)
+            host = serverInput
+            port = 21
+        End Try
+    End Sub
+
+    Private Async Function SyncLocalToRemote(cancellationToken As Threading.CancellationToken) As Task
+        Dim host As String = ""
+        Dim port As Integer = 21
+
+        Dim serverText As String = If(txtFtpServer?.Text, "")
+        Dim usernameText As String = If(txtFtpUsername?.Text, "")
+        Dim passwordText As String = If(txtFtpPassword?.Text, "")
+        Dim localFolderText As String = If(txtLocalFolder?.Text, "")
+        Dim remoteFolderText As String = If(txtRemoteFolder?.Text, "")
+
+        ParseFtpUrl(serverText, host, port)
+        logger.Info($"Starting Local to Remote sync - Target: {host}:{port}")
+
+        Using client As New AsyncFtpClient()
+            client.Host = host
+            client.Port = port
+            client.Credentials = New System.Net.NetworkCredential(usernameText, passwordText)
+
+            ' Enhanced configuration for problematic servers
+            client.Config.ConnectTimeout = 30000
+            client.Config.DataConnectionType = FtpDataConnectionType.AutoPassive
+            client.Config.PassiveMaxAttempts = 5
+            client.Config.DataConnectionConnectTimeout = 20000
+            client.Config.DataConnectionReadTimeout = 20000
+            client.Config.ValidateAnyCertificate = True
+            client.Config.SocketKeepAlive = True
+
+            logger.Debug("Connecting to FTP server for sync...")
+            Await client.AutoConnect(cancellationToken)
+            logger.Info("Successfully connected to FTP server for sync")
+
+            ' Create base remote directory if specified
+            If Not String.IsNullOrEmpty(remoteFolderText) Then
+                logger.Debug($"Creating remote base directory: {remoteFolderText}")
+                Await client.CreateDirectory(remoteFolderText, True, cancellationToken)
+                logger.Info($"Remote base directory ensured: {remoteFolderText}")
+            End If
+
+            logger.Debug($"Scanning local directory recursively: {localFolderText}")
+            Dim localFiles As String() = Directory.GetFiles(localFolderText, "*", SearchOption.AllDirectories)
+            Dim totalFiles As Integer = localFiles.Length
+            logger.Info($"Found {totalFiles} files to upload (including subdirectories)")
+
+            If totalFiles = 0 Then
+                logger.Warning("No files found in local directory")
+                Me.Invoke(Sub()
+                              If lblProgress IsNot Nothing Then
+                                  lblProgress.Text = "No files to upload"
+                              End If
+                          End Sub)
+                Return
+            End If
+
+            Dim processedFiles As Integer = 0
+            Dim successCount As Integer = 0
+            Dim errorCount As Integer = 0
+
+            For Each localFile As String In localFiles
+                If cancellationToken.IsCancellationRequested Then
+                    logger.Warning("Upload cancelled by user")
+                    Throw New OperationCanceledException()
+                End If
+
+                Try
+                    ' Get relative path from local base folder
+                    Dim relativePath As String = Path.GetRelativePath(localFolderText, localFile)
+
+                    ' Convert Windows path separators to Unix/FTP format
+                    Dim unixRelativePath As String = relativePath.Replace("\"c, "/"c)
+
+                    ' Construct full remote path
+                    Dim remotePath As String
+                    If String.IsNullOrEmpty(remoteFolderText) Then
+                        remotePath = unixRelativePath
+                    Else
+                        remotePath = $"{remoteFolderText.TrimEnd("/"c)}/{unixRelativePath}"
+                    End If
+
+                    logger.Debug($"Uploading file {processedFiles + 1}/{totalFiles}: {localFile} -> {remotePath}")
+                    Me.Invoke(Sub()
+                                  If lblProgress IsNot Nothing Then
+                                      lblProgress.Text = $"Uploading: {relativePath} ({processedFiles + 1}/{totalFiles})"
+                                  End If
+                                  If progressBar IsNot Nothing Then
+                                      progressBar.Value = CInt((processedFiles / totalFiles) * 100)
+                                  End If
+                              End Sub)
+
+                    ' Ensure remote directory structure exists
+                    Dim remoteDir As String = ""
+                    If remotePath.Contains("/") Then
+                        Dim lastSlashIndex As Integer = remotePath.LastIndexOf("/"c)
+                        remoteDir = remotePath.Substring(0, lastSlashIndex)
+
+                        If Not String.IsNullOrEmpty(remoteDir) Then
+                            Try
+                                logger.Debug($"Creating remote directory structure: {remoteDir}")
+                                Await client.CreateDirectory(remoteDir, True, cancellationToken)
+                                logger.Debug($"Remote directory created/verified: {remoteDir}")
+                            Catch ex As Exception
+                                logger.Warning($"Could not create remote directory {remoteDir}: {ex.Message}")
+                            End Try
+                        End If
+                    End If
+
+                    ' Multiple upload attempts with different settings
+                    Dim uploadSuccessful As Boolean = False
+                    Dim originalTransferMode = client.Config.DataConnectionType
+
+                    ' Attempt 1: Use current settings
+                    Try
+                        Await client.UploadFile(localFile, remotePath, FtpRemoteExists.Overwrite, True, token:=cancellationToken)
+                        uploadSuccessful = True
+                        logger.Debug($"Successfully uploaded: {remotePath}")
+                    Catch ex As Exception
+                        logger.Debug($"Upload attempt 1 failed for {Path.GetFileName(localFile)}: {ex.Message}")
+                    End Try
+
+                    ' Attempt 2: Try with AutoActive if first failed
+                    If Not uploadSuccessful Then
+                        Try
+                            client.Config.DataConnectionType = FtpDataConnectionType.AutoActive
+                            Await client.UploadFile(localFile, remotePath, FtpRemoteExists.Overwrite, True, token:=cancellationToken)
+                            uploadSuccessful = True
+                            logger.Debug($"Successfully uploaded with AutoActive: {remotePath}")
+                        Catch ex As Exception
+                            logger.Debug($"Upload attempt 2 failed for {Path.GetFileName(localFile)}: {ex.Message}")
+                        Finally
+                            client.Config.DataConnectionType = originalTransferMode
+                        End Try
+                    End If
+
+                    ' Attempt 3: Try with PORT mode if still failed
+                    If Not uploadSuccessful Then
+                        Try
+                            client.Config.DataConnectionType = FtpDataConnectionType.PORT
+                            Await client.UploadFile(localFile, remotePath, FtpRemoteExists.Overwrite, True, token:=cancellationToken)
+                            uploadSuccessful = True
+                            logger.Debug($"Successfully uploaded with PORT: {remotePath}")
+                        Catch ex As Exception
+                            logger.Debug($"Upload attempt 3 failed for {Path.GetFileName(localFile)}: {ex.Message}")
+                        Finally
+                            client.Config.DataConnectionType = originalTransferMode
+                        End Try
+                    End If
+
+                    If uploadSuccessful Then
+                        successCount += 1
+                        logger.Debug($"Upload completed successfully: {localFile} -> {remotePath}")
+                    Else
+                        errorCount += 1
+                        logger.Error($"All upload attempts failed for: {localFile}")
+                    End If
+
+                Catch ex As Exception When Not TypeOf ex Is OperationCanceledException
+                    errorCount += 1
+                    logger.Error($"Failed to upload {localFile}", ex)
+                End Try
+
+                processedFiles += 1
+            Next
+
+            logger.Info($"Disconnecting from FTP server...")
+            Await client.Disconnect(cancellationToken)
+            logger.Info($"Upload completed - Success: {successCount}, Errors: {errorCount}, Total: {processedFiles}")
+
+            Me.Invoke(Sub()
+                          If progressBar IsNot Nothing Then
+                              progressBar.Value = 100
+                          End If
+                          If lblProgress IsNot Nothing Then
+                              lblProgress.Text = $"Completed: {successCount} uploaded, {errorCount} errors"
+                          End If
+                      End Sub)
+        End Using
+    End Function
+
+    Private Async Function SyncRemoteToLocal(cancellationToken As Threading.CancellationToken) As Task
+        Dim host As String = ""
+        Dim port As Integer = 21
+
+        Dim serverText As String = If(txtFtpServer?.Text, "")
+        Dim usernameText As String = If(txtFtpUsername?.Text, "")
+        Dim passwordText As String = If(txtFtpPassword?.Text, "")
+        Dim localFolderText As String = If(txtLocalFolder?.Text, "")
+        Dim remoteFolderText As String = If(txtRemoteFolder?.Text, "")
+
+        ParseFtpUrl(serverText, host, port)
+        logger.Info($"Starting Remote to Local sync - Source: {host}:{port}")
+
+        Using client As New AsyncFtpClient()
+            client.Host = host
+            client.Port = port
+            client.Credentials = New System.Net.NetworkCredential(usernameText, passwordText)
+
+            ' Enhanced configuration for problematic servers
+            client.Config.ConnectTimeout = 30000
+            client.Config.DataConnectionType = FtpDataConnectionType.AutoPassive
+            client.Config.PassiveMaxAttempts = 5
+            client.Config.DataConnectionConnectTimeout = 20000
+            client.Config.DataConnectionReadTimeout = 20000
+            client.Config.ValidateAnyCertificate = True
+            client.Config.SocketKeepAlive = True
+
+            logger.Debug("Connecting to FTP server for download sync...")
+            Await client.AutoConnect(cancellationToken)
+            logger.Info("Successfully connected to FTP server for download sync")
+
+            Dim remoteDirectory As String = If(String.IsNullOrEmpty(remoteFolderText), "/", remoteFolderText)
+
+            ' Check if remote path is a specific file
+            If Not String.IsNullOrEmpty(remoteFolderText) AndAlso remoteFolderText.Contains(".") Then
+                logger.Debug($"Remote path appears to be a file: {remoteFolderText}")
+                Try
+                    If Await client.FileExists(remoteFolderText, cancellationToken) Then
+                        ' Process single file download
+                        Await ProcessSingleFileDownload(client, remoteFolderText, localFolderText, cancellationToken)
+
+                        ' Disconnect and return
+                        Await client.Disconnect(cancellationToken)
+                        Return
+                    Else
+                        Throw New FileNotFoundException($"Specified file not found: {remoteFolderText}")
+                    End If
+                Catch ex As Exception
+                    logger.Error($"Error checking specific file: {remoteFolderText}", ex)
+                    Throw New Exception($"Cannot access specified file: {remoteFolderText}. Error: {ex.Message}")
+                End Try
+            Else
+                ' Use recursive download to maintain folder structure
+                logger.Info($"Starting recursive download from: {remoteDirectory}")
+
+                Me.Invoke(Sub()
+                              If lblProgress IsNot Nothing Then
+                                  lblProgress.Text = "Scanning remote directory structure..."
+                              End If
+                          End Sub)
+
+                ' Get all files recursively with their paths
+                Dim allRemoteFiles = Await GetAllFilesRecursively(client, remoteDirectory, cancellationToken)
+
+                Dim totalFiles As Integer = allRemoteFiles.Count
+                logger.Info($"Found {totalFiles} files in directory structure")
+
+                If totalFiles = 0 Then
+                    logger.Warning("No files found in remote directory structure")
+                    Me.Invoke(Sub()
+                                  If lblProgress IsNot Nothing Then
+                                      lblProgress.Text = "No files found to download"
+                                  End If
+                              End Sub)
+                    Return
+                End If
+
+                Dim processedFiles As Integer = 0
+                Dim successCount As Integer = 0
+                Dim errorCount As Integer = 0
+
+                ' Download each file maintaining directory structure
+                For Each fileInfo In allRemoteFiles
+                    If cancellationToken.IsCancellationRequested Then
+                        logger.Warning("Download cancelled by user")
+                        Throw New OperationCanceledException()
+                    End If
+
+                    Try
+                        Dim remotePath As String = fileInfo("RemotePath").ToString()
+                        Dim relativePath As String = fileInfo("RelativePath").ToString()
+                        Dim fileName As String = Path.GetFileName(relativePath)
+
+                        ' Create local path maintaining directory structure
+                        Dim localPath As String = Path.Combine(localFolderText, relativePath.Replace("/"c, "\"c))
+
+                        ' Ensure local directory exists
+                        Dim localDir As String = Path.GetDirectoryName(localPath)
+                        If Not Directory.Exists(localDir) Then
+                            Directory.CreateDirectory(localDir)
+                            logger.Debug($"Created local directory: {localDir}")
+                        End If
+
+                        ' Handle file name conflicts by adding suffix
+                        Dim counter As Integer = 1
+                        While File.Exists(localPath)
+                            Dim nameWithoutExt As String = Path.GetFileNameWithoutExtension(fileName)
+                            Dim extension As String = Path.GetExtension(fileName)
+                            Dim newFileName As String = $"{nameWithoutExt}_{counter}{extension}"
+                            localPath = Path.Combine(localDir, newFileName)
+                            counter += 1
+                        End While
+
+                        logger.Debug($"Downloading file {processedFiles + 1}/{totalFiles}: {remotePath}")
+                        Me.Invoke(Sub()
+                                      If lblProgress IsNot Nothing Then
+                                          lblProgress.Text = $"Downloading: {relativePath} ({processedFiles + 1}/{totalFiles})"
+                                      End If
+                                      If progressBar IsNot Nothing Then
+                                          progressBar.Value = CInt((processedFiles / totalFiles) * 100)
+                                      End If
+                                  End Sub)
+
+                        ' Try download with multiple transfer modes
+                        Dim downloadSuccessful As Boolean = False
+                        Dim originalTransferMode = client.Config.DataConnectionType
+
+                        ' Attempt 1: Current settings
+                        Try
+                            Await client.DownloadFile(localPath, remotePath, FtpLocalExists.Overwrite, token:=cancellationToken)
+                            downloadSuccessful = True
+                            logger.Debug($"Successfully downloaded: {remotePath} -> {localPath}")
+                        Catch ex As Exception
+                            logger.Debug($"Download attempt 1 failed for {fileName}: {ex.Message}")
+                        End Try
+
+                        ' Attempt 2: AutoActive mode
+                        If Not downloadSuccessful Then
+                            Try
+                                client.Config.DataConnectionType = FtpDataConnectionType.AutoActive
+                                Await client.DownloadFile(localPath, remotePath, FtpLocalExists.Overwrite, token:=cancellationToken)
+                                downloadSuccessful = True
+                                logger.Debug($"Successfully downloaded with AutoActive: {remotePath}")
+                            Catch ex As Exception
+                                logger.Debug($"Download attempt 2 failed for {fileName}: {ex.Message}")
+                            Finally
+                                client.Config.DataConnectionType = originalTransferMode
+                            End Try
+                        End If
+
+                        ' Attempt 3: PORT mode
+                        If Not downloadSuccessful Then
+                            Try
+                                client.Config.DataConnectionType = FtpDataConnectionType.PORT
+                                Await client.DownloadFile(localPath, remotePath, FtpLocalExists.Overwrite, token:=cancellationToken)
+                                downloadSuccessful = True
+                                logger.Debug($"Successfully downloaded with PORT: {remotePath}")
+                            Catch ex As Exception
+                                logger.Debug($"Download attempt 3 failed for {fileName}: {ex.Message}")
+                            Finally
+                                client.Config.DataConnectionType = originalTransferMode
+                            End Try
+                        End If
+
+                        If downloadSuccessful Then
+                            successCount += 1
+                            logger.Debug($"Download completed: {localPath}")
+                        Else
+                            errorCount += 1
+                            logger.Error($"All download attempts failed for: {remotePath}")
+                        End If
+
+                    Catch ex As Exception When Not TypeOf ex Is OperationCanceledException
+                        errorCount += 1
+                        logger.Error($"Error downloading file", ex)
+                    End Try
+
+                    processedFiles += 1
+                Next
+
+                logger.Info($"Disconnecting from FTP server...")
+                Await client.Disconnect(cancellationToken)
+                logger.Info($"Download completed - Success: {successCount}, Errors: {errorCount}, Total: {processedFiles}")
+
+                Me.Invoke(Sub()
+                              If progressBar IsNot Nothing Then
+                                  progressBar.Value = 100
+                              End If
+                              If lblProgress IsNot Nothing Then
+                                  lblProgress.Text = $"Completed: {successCount} downloaded, {errorCount} errors"
+                              End If
+                          End Sub)
+            End If
+        End Using
+    End Function
+
+    ' Helper method to get all files recursively maintaining path structure
+    Private Async Function GetAllFilesRecursively(client As AsyncFtpClient, directoryPath As String, cancellationToken As Threading.CancellationToken, Optional basePath As String = "") As Task(Of List(Of Dictionary(Of String, String)))
+        Dim allFiles As New List(Of Dictionary(Of String, String))()
+
+        Try
+            logger.Debug($"Scanning directory: {directoryPath}")
+
+            ' Get listing for current directory
+            Dim items = Await client.GetListing(directoryPath, FtpListOption.Modify, cancellationToken)
+
+            For Each item In items
+                If cancellationToken.IsCancellationRequested Then
+                    Return allFiles
+                End If
+
+                If item.Type = FtpObjectType.File Then
+                    ' Calculate relative path from base directory
+                    Dim relativePath As String
+                    If String.IsNullOrEmpty(basePath) Then
+                        relativePath = item.Name
+                    Else
+                        relativePath = $"{basePath}/{item.Name}"
+                    End If
+
+                    ' Full remote path
+                    Dim fullRemotePath As String = If(String.IsNullOrEmpty(item.FullName),
+                                                    $"{directoryPath.TrimEnd("/"c)}/{item.Name}",
+                                                    item.FullName)
+
+                    ' Add file info
+                    Dim fileInfo As New Dictionary(Of String, String) From {
+                        {"RemotePath", fullRemotePath},
+                        {"RelativePath", relativePath},
+                        {"FileName", item.Name}
+                    }
+
+                    allFiles.Add(fileInfo)
+                    logger.Debug($"Added file: {relativePath}")
+
+                ElseIf item.Type = FtpObjectType.Directory Then
+                    ' Recursively scan subdirectories
+                    Try
+                        Dim subDirPath As String = $"{directoryPath.TrimEnd("/"c)}/{item.Name}"
+                        Dim subBasePath As String = If(String.IsNullOrEmpty(basePath), item.Name, $"{basePath}/{item.Name}")
+
+                        logger.Debug($"Entering subdirectory: {subDirPath}")
+                        Dim subFiles = Await GetAllFilesRecursively(client, subDirPath, cancellationToken, subBasePath)
+                        allFiles.AddRange(subFiles)
+
+                    Catch ex As Exception
+                        logger.Warning($"Could not access subdirectory {item.Name}: {ex.Message}")
+                    End Try
+                End If
+            Next
+
+        Catch ex As Exception
+            logger.Warning($"Error scanning directory {directoryPath}: {ex.Message}")
+        End Try
+
+        Return allFiles
+    End Function
+
+    ' Helper method to process single file downloads
+    Private Async Function ProcessSingleFileDownload(client As AsyncFtpClient, remoteFilePath As String, localFolderText As String, cancellationToken As Threading.CancellationToken) As Task
+        Try
+            Dim fileName As String = Path.GetFileName(remoteFilePath)
+            Dim localPath As String = Path.Combine(localFolderText, fileName)
+
+            ' Create unique filename if file already exists
+            Dim counter As Integer = 1
+            While File.Exists(localPath)
+                Dim nameWithoutExt As String = Path.GetFileNameWithoutExtension(fileName)
+                Dim extension As String = Path.GetExtension(fileName)
+                Dim newFileName As String = $"{nameWithoutExt}_{counter}{extension}"
+                localPath = Path.Combine(localFolderText, newFileName)
+                counter += 1
+            End While
+
+            logger.Debug($"Downloading single file: {remoteFilePath}")
+            Me.Invoke(Sub()
+                          If lblProgress IsNot Nothing Then
+                              lblProgress.Text = $"Downloading: {fileName}"
+                          End If
+                          If progressBar IsNot Nothing Then
+                              progressBar.Value = 50
+                          End If
+                      End Sub)
+
+            ' Try download with multiple transfer modes
+            Dim downloadSuccessful As Boolean = False
+            Dim originalTransferMode = client.Config.DataConnectionType
+
+            ' Attempt 1: Current settings
+            Try
+                Await client.DownloadFile(localPath, remoteFilePath, FtpLocalExists.Overwrite, token:=cancellationToken)
+                downloadSuccessful = True
+                logger.Debug($"Successfully downloaded: {remoteFilePath}")
+            Catch ex As Exception
+                logger.Debug($"Download attempt 1 failed for {fileName}: {ex.Message}")
+            End Try
+
+            ' Attempt 2: AutoActive mode
+            If Not downloadSuccessful Then
+                Try
+                    client.Config.DataConnectionType = FtpDataConnectionType.AutoActive
+                    Await client.DownloadFile(localPath, remoteFilePath, FtpLocalExists.Overwrite, token:=cancellationToken)
+                    downloadSuccessful = True
+                    logger.Debug($"Successfully downloaded with AutoActive: {remoteFilePath}")
+                Catch ex As Exception
+                    logger.Debug($"Download attempt 2 failed for {fileName}: {ex.Message}")
+                Finally
+                    client.Config.DataConnectionType = originalTransferMode
+                End Try
+            End If
+
+            ' Attempt 3: PORT mode
+            If Not downloadSuccessful Then
+                Try
+                    client.Config.DataConnectionType = FtpDataConnectionType.PORT
+                    Await client.DownloadFile(localPath, remoteFilePath, FtpLocalExists.Overwrite, token:=cancellationToken)
+                    downloadSuccessful = True
+                    logger.Debug($"Successfully downloaded with PORT: {remoteFilePath}")
+                Catch ex As Exception
+                    logger.Debug($"Download attempt 3 failed for {fileName}: {ex.Message}")
+                Finally
+                    client.Config.DataConnectionType = originalTransferMode
+                End Try
+            End If
+
+            If downloadSuccessful Then
+                logger.Info($"Single file download completed: {localPath}")
+                Me.Invoke(Sub()
+                              If lblProgress IsNot Nothing Then
+                                  lblProgress.Text = $"Completed: 1 downloaded, 0 errors"
+                              End If
+                              If progressBar IsNot Nothing Then
+                                  progressBar.Value = 100
+                              End If
+                          End Sub)
+            Else
+                logger.Error($"All download attempts failed for: {remoteFilePath}")
+                Me.Invoke(Sub()
+                              If lblProgress IsNot Nothing Then
+                                  lblProgress.Text = $"Completed: 0 downloaded, 1 error"
+                              End If
+                              If progressBar IsNot Nothing Then
+                                  progressBar.Value = 100
+                              End If
+                          End Sub)
+                Throw New Exception($"Failed to download file: {remoteFilePath}")
+            End If
+
+        Catch ex As Exception
+            logger.Error($"Error in single file download", ex)
+            Throw
+        End Try
+    End Function
+
+    Private Sub frmMain_FormClosing(sender As Object, e As FormClosingEventArgs) Handles Me.FormClosing
+        If syncInProgress Then
+            Dim result As DialogResult = MessageBox.Show("Synchronization is in progress. Do you want to cancel and exit?",
+                                                        "Confirm Exit", MessageBoxButtons.YesNo, MessageBoxIcon.Question)
+            If result = DialogResult.No Then
+                e.Cancel = True
+                Return
+            End If
+
+            If cancelTokenSource IsNot Nothing Then
+                cancelTokenSource.Cancel()
+            End If
+        End If
+
+        SaveConfiguration()
+        logger.Info("Application closing")
+    End Sub
+
+    Private Sub txtConfiguration_TextChanged(sender As Object, e As EventArgs) Handles txtFtpServer.TextChanged, txtFtpUsername.TextChanged, txtFtpPassword.TextChanged, txtLocalFolder.TextChanged, txtRemoteFolder.TextChanged
+        If configManager Is Nothing OrElse Not Me.IsHandleCreated OrElse isFormLoading Then
+            Return
+        End If
+
+        Static saveTimer As Timer
+        If saveTimer IsNot Nothing Then
+            saveTimer.Stop()
+            saveTimer.Dispose()
+        End If
+
+        saveTimer = New Timer()
+        saveTimer.Interval = 1000
+        AddHandler saveTimer.Tick, Sub()
+                                       saveTimer.Stop()
+                                       saveTimer.Dispose()
+                                       If Not isFormLoading Then
+                                           SaveConfiguration()
+                                       End If
+                                   End Sub
+        saveTimer.Start()
+    End Sub
+End Class
+
+==================== FILE: Logger.vb ====================
+Imports System.IO
+Imports System.Text
+
+Public Class Logger
+    Private Shared _instance As Logger
+    Private ReadOnly _logFilePath As String
+    Private ReadOnly _logLock As New Object()
+
+    Private Sub New()
+        Try
+            ' Create logs directory in application folder
+            Dim appDirectory As String = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location)
+            Dim logsDirectory As String = Path.Combine(appDirectory, "Logs")
+
+            If Not Directory.Exists(logsDirectory) Then
+                Directory.CreateDirectory(logsDirectory)
+            End If
+
+            ' Create log file with date
+            Dim logFileName As String = $"FTPSync_{DateTime.Now:yyyy-MM-dd}.log"
+            _logFilePath = Path.Combine(logsDirectory, logFileName)
+        Catch ex As Exception
+            ' Fallback to temp directory if app directory fails
+            _logFilePath = Path.Combine(Path.GetTempPath(), $"FTPSync_{DateTime.Now:yyyy-MM-dd}.log")
+        End Try
+    End Sub
+
+    Public Shared ReadOnly Property Instance As Logger
+        Get
+            If _instance Is Nothing Then
+                _instance = New Logger()
+            End If
+            Return _instance
+        End Get
+    End Property
+
+    Private Sub WriteLog(level As String, message As String, Optional ex As Exception = Nothing)
+        Try
+            SyncLock _logLock
+                Dim logEntry As New StringBuilder()
+                logEntry.AppendLine($"[{DateTime.Now:yyyy-MM-dd HH:mm:ss.fff}] [{level}] {message}")
+
+                If ex IsNot Nothing Then
+                    logEntry.AppendLine($"Exception: {ex.GetType().Name}")
+                    logEntry.AppendLine($"Message: {ex.Message}")
+                    logEntry.AppendLine($"Stack Trace: {ex.StackTrace}")
+
+                    If ex.InnerException IsNot Nothing Then
+                        logEntry.AppendLine($"Inner Exception: {ex.InnerException.GetType().Name}")
+                        logEntry.AppendLine($"Inner Message: {ex.InnerException.Message}")
+                    End If
+                End If
+
+                File.AppendAllText(_logFilePath, logEntry.ToString())
+            End SyncLock
+        Catch
+            ' Silently fail if logging fails to avoid infinite loops
+        End Try
+    End Sub
+
+    Public Sub Debug(message As String, Optional ex As Exception = Nothing)
+        WriteLog("DEBUG", message, ex)
+    End Sub
+
+    Public Sub Info(message As String, Optional ex As Exception = Nothing)
+        WriteLog("INFO", message, ex)
+    End Sub
+
+    Public Sub Warning(message As String, Optional ex As Exception = Nothing)
+        WriteLog("WARNING", message, ex)
+    End Sub
+
+    Public Sub [Error](message As String, Optional ex As Exception = Nothing)
+        WriteLog("ERROR", message, ex)
+    End Sub
+
+    Public Sub Critical(message As String, Optional ex As Exception = Nothing)
+        WriteLog("CRITICAL", message, ex)
+    End Sub
+
+    Public Function GetLogFilePath() As String
+        Return _logFilePath
+    End Function
+
+    Public Function GetRecentLogs(maxLines As Integer) As String()
+        Try
+            SyncLock _logLock
+                If File.Exists(_logFilePath) Then
+                    Dim allLines As String() = File.ReadAllLines(_logFilePath)
+                    If allLines.Length <= maxLines Then
+                        Return allLines
+                    Else
+                        Dim recentLines(maxLines - 1) As String
+                        Array.Copy(allLines, allLines.Length - maxLines, recentLines, 0, maxLines)
+                        Return recentLines
+                    End If
+                Else
+                    Return {}
+                End If
+            End SyncLock
+        Catch ex As Exception
+            Return {$"Error reading log file: {ex.Message}"}
+        End Try
+    End Function
+
+    Public Sub ClearOldLogs(daysToKeep As Integer)
+        Try
+            Dim logsDirectory As String = Path.GetDirectoryName(_logFilePath)
+            If Directory.Exists(logsDirectory) Then
+                Dim cutoffDate As DateTime = DateTime.Now.AddDays(-daysToKeep)
+
+                For Each logFile As String In Directory.GetFiles(logsDirectory, "FTPSync_*.log")
+                    If File.GetCreationTime(logFile) < cutoffDate Then
+                        File.Delete(logFile)
+                        Info($"Deleted old log file: {Path.GetFileName(logFile)}")
+                    End If
+                Next
+            End If
+        Catch ex As Exception
+            Warning("Failed to clean old log files", ex)
+        End Try
+    End Sub
+End Class
+
+==================== FILE: Program.vb ====================
+Imports System.Windows.Forms
+
+Module Program
+    ''' <summary>
+    ''' The main entry point for the application.
+    ''' </summary>
+    <STAThread>
+    Sub Main()
+        ' Enable visual styles and set compatible text rendering default
+        Application.EnableVisualStyles()
+        Application.SetCompatibleTextRenderingDefault(False)
+
+        ' Set the application's unhandled exception mode
+        Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException)
+
+        ' Add global exception handlers
+        AddHandler Application.ThreadException, AddressOf Application_ThreadException
+        AddHandler AppDomain.CurrentDomain.UnhandledException, AddressOf CurrentDomain_UnhandledException
+
+        Try
+            ' Run the main form
+            Application.Run(New frmMain())
+        Catch ex As Exception
+            MessageBox.Show($"A critical error occurred: {ex.Message}",
+                          "Critical Error",
+                          MessageBoxButtons.OK,
+                          MessageBoxIcon.Error)
+        End Try
+    End Sub
+
+    Private Sub Application_ThreadException(sender As Object, e As Threading.ThreadExceptionEventArgs)
+        Try
+            Dim errorMessage As String = $"An unexpected error occurred: {e.Exception.Message}{vbCrLf}{vbCrLf}" &
+                                       $"Details: {e.Exception.ToString()}"
+
+            MessageBox.Show(errorMessage,
+                          "Application Error",
+                          MessageBoxButtons.OK,
+                          MessageBoxIcon.Error)
+        Catch
+            ' If even the error handler fails, try to show a simple message
+            MessageBox.Show("A critical error occurred and the application needs to close.",
+                          "Critical Error",
+                          MessageBoxButtons.OK,
+                          MessageBoxIcon.Error)
+        End Try
+    End Sub
+
+    Private Sub CurrentDomain_UnhandledException(sender As Object, e As UnhandledExceptionEventArgs)
+        Try
+            Dim ex As Exception = TryCast(e.ExceptionObject, Exception)
+            Dim errorMessage As String
+
+            If ex IsNot Nothing Then
+                errorMessage = $"An unhandled error occurred: {ex.Message}{vbCrLf}{vbCrLf}" &
+                             $"Details: {ex.ToString()}"
+            Else
+                errorMessage = "An unknown unhandled error occurred."
+            End If
+
+            MessageBox.Show(errorMessage,
+                          "Unhandled Error",
+                          MessageBoxButtons.OK,
+                          MessageBoxIcon.Error)
+        Catch
+            ' Last resort error message
+            MessageBox.Show("A critical unhandled error occurred.",
+                          "Critical Error",
+                          MessageBoxButtons.OK,
+                          MessageBoxIcon.Error)
+        End Try
+    End Sub
+End Module
+
+==================== FILE: RepoFTP.vbproj ====================
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <StartupObject>RepoFTP.Program</StartupObject>
+    <UseWindowsForms>true</UseWindowsForms>
+    <MyType>Empty</MyType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Remove="RepoBundle\**" />
+    <EmbeddedResource Remove="RepoBundle\**" />
+    <None Remove="RepoBundle\**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Import Include="System.Data" />
+    <Import Include="System.Drawing" />
+    <Import Include="System.Windows.Forms" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FluentFTP" Version="52.1.0" />
+  </ItemGroup>
+
+</Project>
+

@@ -1,0 +1,27 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <StartupObject>RepoFTP.Program</StartupObject>
+    <UseWindowsForms>true</UseWindowsForms>
+    <MyType>Empty</MyType>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Remove="RepoBundle\**" />
+    <EmbeddedResource Remove="RepoBundle\**" />
+    <None Remove="RepoBundle\**" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Import Include="System.Data" />
+    <Import Include="System.Drawing" />
+    <Import Include="System.Windows.Forms" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FluentFTP" Version="52.1.0" />
+  </ItemGroup>
+
+</Project>
